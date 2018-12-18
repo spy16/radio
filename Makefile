@@ -1,2 +1,3 @@
 test:
-	go test -cover ./...
+	go mod tidy -v
+	go test -cover ./. ./resp
