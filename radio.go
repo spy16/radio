@@ -2,23 +2,21 @@ package radio
 
 import (
 	"context"
+	"io"
 	"net"
 	"time"
 
-	"github.com/k0kubun/pp"
+	"github.com/davecgh/go-spew/spew"
 	"github.com/spy16/radio/resp"
 )
 
 // New initializes the server
-func New(lg Logger) *Server {
-	return &Server{
-		lg: lg,
-	}
+func New() *Server {
+	return &Server{}
 }
 
 // Server represents a RESP compatible server.
 type Server struct {
-	lg Logger
 }
 
 // Serve starts the server loop for accepting client connections.
@@ -44,7 +42,7 @@ func (srv *Server) Serve(ctx context.Context, l net.Listener) error {
 }
 
 func (srv *Server) clientLoop(ctx context.Context, con net.Conn) {
-	parser := resp.NewParser(con, true)
+	parser := resp.New(con)
 	defer con.Close()
 
 	for {
@@ -56,19 +54,15 @@ func (srv *Server) clientLoop(ctx context.Context, con net.Conn) {
 
 		val, err := parser.Next()
 		if err != nil {
-			srv.lg.Errorf("failed to parse: %v", err)
-			return
+			if err == io.EOF {
+				break
+			}
+
+			con.Write([]byte(resp.ErrorStr("ERR " + err.Error()).Serialize()))
+			continue
 		}
 
-		pp.Println(val)
-		con.Write([]byte(""))
+		spew.Dump(val)
+		con.Write([]byte(resp.SimpleStr("PONG").Serialize()))
 	}
-}
-
-// Logger is responsible for levelled logging.
-type Logger interface {
-	Debugf(msg string, args ...interface{})
-	Infof(msg string, args ...interface{})
-	Warnf(msg string, args ...interface{})
-	Errorf(msg string, args ...interface{})
 }

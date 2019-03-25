@@ -7,160 +7,147 @@ import (
 	"strconv"
 )
 
-// NewParser initializes an instance of parser with given reader.
-func NewParser(rdr io.Reader, extensions bool) *Parser {
-	par := &Parser{}
-	par.rdr = bufio.NewReader(rdr)
-	par.consumers = map[byte]consumerFunc{
-		'+': par.consumeSimpleStr,
-		'-': par.consumeErrStr,
-		':': par.consumeInteger,
-		'$': par.consumeBulkStr,
-		'*': par.consumeArr,
-	}
+var (
+	// ErrProtocol is returned when the data stream is not according to
+	// the RESP spec.
+	ErrProtocol = errors.New("failed to read")
 
-	if extensions {
-		par.consumers['?'] = par.consumeFloat
-	}
+	// ErrNumberFormat is returned when parsing a number fails.
+	ErrNumberFormat = errors.New("invalid integer format")
+)
 
-	return par
+// New initializes an instance of parser with given reader. Reader will be
+// buffered using 'bufio.Scanner'.
+func New(rdr io.Reader) *Parser {
+	return &Parser{
+		sc: bufio.NewScanner(rdr),
+		consumers: map[byte]consumeFunc{
+			'+': consumeSimpleStr,
+			'-': consumeErrorStr,
+			':': consumeInteger,
+			'$': consumeBulkStr,
+			'*': consumeArray,
+		},
+	}
 }
 
-// Parser parses RESP protocol stream from a Reader instance.
+// Parser parser a given reader and emits RESP values.
 type Parser struct {
-	rdr       *bufio.Reader
-	consumers map[byte]consumerFunc
+	inline    bool
+	sc        *bufio.Scanner
+	consumers map[byte]consumeFunc
 }
 
-// Next consumes and parses next set of bytes.
-func (par *Parser) Next() (*Value, error) {
-	prefix, err := par.rdr.ReadByte()
-	if err != nil {
+// consumeFunc is responsible for parsing curLine while consuming more
+// tokens from Parser if required and returning a Value.
+type consumeFunc func(par *Parser, curLine string) (Value, error)
+
+// Next reads next set of bytes from the stream and emits the Value.
+func (par *Parser) Next() (Value, error) {
+	if !par.sc.Scan() {
+		err := par.sc.Err()
+		if err == nil {
+			return nil, io.EOF
+		}
 		return nil, err
+
 	}
+
+	line := par.sc.Text()
+	prefix := line[0]
 
 	consume, found := par.consumers[prefix]
 	if !found {
-		return nil, errors.New("invalid prefix")
+		return InlineStr(line), nil
 	}
 
-	return consume()
+	return consume(par, line)
 }
 
-func (par *Parser) consumeArr() (*Value, error) {
-	s, err := readLine(par.rdr)
+func consumeSimpleStr(_ *Parser, line string) (Value, error) {
+	return SimpleStr(line[1:]), nil
+}
+
+func consumeErrorStr(_ *Parser, line string) (Value, error) {
+	return ErrorStr(line[1:]), nil
+}
+
+func consumeInteger(_ *Parser, line string) (Value, error) {
+	val, err := getNum(line)
 	if err != nil {
 		return nil, err
 	}
 
-	sz, err := strconv.Atoi(s)
+	return Integer(val), nil
+}
+
+func consumeBulkStr(par *Parser, line string) (Value, error) {
+	size, err := getNum(line)
 	if err != nil {
 		return nil, err
 	}
 
-	arr := []*Value{}
-	for i := 0; i < sz; i++ {
+	if size == -1 {
+		return &BulkStr{}, nil
+	}
+
+	read := ""
+	for par.sc.Scan() {
+		read += par.sc.Text()
+		if len(read) >= size {
+			break
+		}
+	}
+
+	if len(read) > size {
+		return nil, ErrProtocol
+	}
+
+	if len(read) < size {
+		err := par.sc.Err()
+		if err == nil {
+			return nil, io.EOF
+		}
+
+		return nil, err
+	}
+
+	return &BulkStr{
+		Value: []byte(read),
+	}, nil
+}
+
+func consumeArray(par *Parser, line string) (Value, error) {
+	size, err := getNum(line)
+	if err != nil {
+		return nil, err
+	}
+
+	if size == -1 {
+		return &Array{
+			Items: nil,
+		}, nil
+	}
+
+	arr := &Array{
+		Items: []Value{},
+	}
+	for i := 0; i < size; i++ {
 		val, err := par.Next()
 		if err != nil {
 			return nil, err
 		}
 
-		arr = append(arr, val)
+		arr.Items = append(arr.Items, val)
 	}
 
-	return &Value{
-		kind: Array,
-		arr:  arr,
-	}, nil
+	return arr, nil
 }
 
-func (par *Parser) consumeBulkStr() (*Value, error) {
-	s, err := readLine(par.rdr)
+func getNum(line string) (int, error) {
+	val, err := strconv.Atoi(line[1:])
 	if err != nil {
-		return nil, err
+		return 0, ErrNumberFormat
 	}
-
-	sz, err := strconv.Atoi(s)
-	if err != nil {
-		return nil, err
-	}
-
-	if sz == 0 {
-		readLine(par.rdr) // skip \r\n
-		return &Value{
-			kind: BulkStr,
-			val:  "",
-		}, nil
-	} else if sz == -1 {
-		readLine(par.rdr)
-		return &Value{
-			kind:  BulkStr,
-			val:   "",
-			isNil: true,
-		}, nil
-	}
-
-	dat := make([]byte, sz)
-	n, err := par.rdr.Read(dat)
-	if err != nil {
-		return nil, err
-	}
-
-	if n < sz {
-		return nil, errors.New("read finished prematurely")
-	}
-	readLine(par.rdr)
-
-	return &Value{
-		kind: BulkStr,
-		val:  string(dat),
-	}, nil
+	return val, nil
 }
-
-func (par *Parser) consumeSimpleStr() (*Value, error) {
-	return readOneLiner(par.rdr, SimpleStr)
-}
-
-func (par *Parser) consumeErrStr() (*Value, error) {
-	return readOneLiner(par.rdr, ErrStr)
-}
-
-func (par *Parser) consumeInteger() (*Value, error) {
-	return readOneLiner(par.rdr, Integer)
-}
-
-func (par *Parser) consumeFloat() (*Value, error) {
-	return readOneLiner(par.rdr, Float)
-}
-
-func readOneLiner(rdr *bufio.Reader, kind Kind) (*Value, error) {
-	s, err := readLine(rdr)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Value{
-		kind: kind,
-		val:  s,
-	}, nil
-}
-
-func readLine(rdr *bufio.Reader) (string, error) {
-	dat, err := rdr.ReadBytes('\n')
-	if err != nil {
-		return "", err
-	}
-
-	dat = dropCR(dat[:len(dat)-1])
-	return string(dat), nil
-}
-
-// dropCR drops a terminal \r from the data.
-func dropCR(data []byte) []byte {
-	if len(data) > 0 && data[len(data)-1] == '\r' {
-		return data[0 : len(data)-1]
-	}
-	return data
-}
-
-type consumerFunc func() (*Value, error)
