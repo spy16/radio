@@ -2,19 +2,10 @@ package resp
 
 import (
 	"bufio"
-	"errors"
-	"fmt"
 	"io"
 	"strconv"
-)
 
-var (
-	// ErrProtocol is returned when the data stream is not according to
-	// the RESP spec.
-	ErrProtocol = errors.New("failed to read")
-
-	// ErrNumberFormat is returned when parsing a number fails.
-	ErrNumberFormat = errors.New("invalid integer format")
+	"github.com/pkg/errors"
 )
 
 // New initializes an instance of parser with given reader. Reader will be
@@ -76,7 +67,7 @@ func (par *Parser) Next() (Value, error) {
 
 	if par.inline && par.inArray {
 		if _, ok := val.(*BulkStr); !ok {
-			return nil, fmt.Errorf("Protocol error: expected '$', got '%c'", val.Serialize()[0])
+			return nil, errors.Wrapf(ErrProtocol, "expected '$', got '%c'", val.Serialize()[0])
 		}
 	}
 
