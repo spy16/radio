@@ -42,7 +42,7 @@ func (srv *Server) Serve(ctx context.Context, l net.Listener) error {
 }
 
 func (srv *Server) clientLoop(ctx context.Context, con net.Conn) {
-	parser := resp.New(con)
+	parser := resp.New(con, true)
 	defer con.Close()
 
 	for {

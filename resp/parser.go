@@ -3,6 +3,7 @@ package resp
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 )
@@ -18,9 +19,10 @@ var (
 
 // New initializes an instance of parser with given reader. Reader will be
 // buffered using 'bufio.Scanner'.
-func New(rdr io.Reader) *Parser {
+func New(rdr io.Reader, inline bool) *Parser {
 	return &Parser{
-		sc: bufio.NewScanner(rdr),
+		inline: inline,
+		sc:     bufio.NewScanner(rdr),
 		consumers: map[byte]consumeFunc{
 			'+': consumeSimpleStr,
 			'-': consumeErrorStr,
@@ -36,6 +38,8 @@ type Parser struct {
 	inline    bool
 	sc        *bufio.Scanner
 	consumers map[byte]consumeFunc
+
+	inArray bool
 }
 
 // consumeFunc is responsible for parsing curLine while consuming more
@@ -56,12 +60,27 @@ func (par *Parser) Next() (Value, error) {
 	line := par.sc.Text()
 	prefix := line[0]
 
+	if par.inline && prefix != '*' && !par.inArray {
+		return InlineStr(line), nil
+	}
+
 	consume, found := par.consumers[prefix]
 	if !found {
 		return InlineStr(line), nil
 	}
 
-	return consume(par, line)
+	val, err := consume(par, line)
+	if err != nil {
+		return nil, err
+	}
+
+	if par.inline && par.inArray {
+		if _, ok := val.(*BulkStr); !ok {
+			return nil, fmt.Errorf("Protocol error: expected '$', got '%c'", val.Serialize()[0])
+		}
+	}
+
+	return val, nil
 }
 
 func consumeSimpleStr(_ *Parser, line string) (Value, error) {
@@ -118,6 +137,11 @@ func consumeBulkStr(par *Parser, line string) (Value, error) {
 }
 
 func consumeArray(par *Parser, line string) (Value, error) {
+	par.inArray = true
+	defer func() {
+		par.inArray = false
+	}()
+
 	size, err := getNum(line)
 	if err != nil {
 		return nil, err
@@ -150,4 +174,15 @@ func getNum(line string) (int, error) {
 		return 0, ErrNumberFormat
 	}
 	return val, nil
+}
+
+func ensureBulkStrArray(arr *Array) error {
+	for _, itm := range arr.Items {
+		_, isBulkStr := itm.(*BulkStr)
+
+		if !isBulkStr {
+		}
+	}
+
+	return nil
 }

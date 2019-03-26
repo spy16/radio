@@ -135,7 +135,7 @@ func TestParser_Next(suite *testing.T) {
 }
 
 func parse(s string, fx func(val resp.Value, err error)) {
-	par := resp.New(strings.NewReader(s))
+	par := resp.New(strings.NewReader(s), false)
 	val, err := par.Next()
 	fx(val, err)
 }
