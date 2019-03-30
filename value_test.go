@@ -1,11 +1,11 @@
-package resp_test
+package radio_test
 
 import (
 	"fmt"
 	"reflect"
 	"testing"
 
-	"github.com/spy16/radio/resp"
+	"github.com/spy16/radio"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -13,71 +13,71 @@ func TestSerialize(suite *testing.T) {
 	suite.Parallel()
 
 	cases := []struct {
-		val  resp.Value
+		val  radio.Value
 		resp string
 		str  string
 	}{
 		{
-			val:  resp.SimpleStr("hello"),
+			val:  radio.SimpleStr("hello"),
 			resp: "+hello\r\n",
 			str:  "hello",
 		},
 		{
-			val:  resp.InlineStr("hello"),
+			val:  radio.InlineStr("hello"),
 			resp: "+hello\r\n",
 			str:  "hello",
 		},
 		{
-			val:  resp.Integer(10),
+			val:  radio.Integer(10),
 			resp: ":10\r\n",
 			str:  "10",
 		},
 		{
-			val:  resp.ErrorStr("failed"),
+			val:  radio.ErrorStr("failed"),
 			resp: "-failed\r\n",
 			str:  "failed",
 		},
 		{
-			val: &resp.BulkStr{
+			val: &radio.BulkStr{
 				Value: nil,
 			},
 			resp: "$-1\r\n",
 			str:  "",
 		},
 		{
-			val: &resp.BulkStr{
+			val: &radio.BulkStr{
 				Value: []byte(""),
 			},
 			resp: "$0\r\n\r\n",
 			str:  "",
 		},
 		{
-			val: &resp.BulkStr{
+			val: &radio.BulkStr{
 				Value: []byte("hello"),
 			},
 			resp: "$5\r\nhello\r\n",
 			str:  "hello",
 		},
 		{
-			val: &resp.Array{
+			val: &radio.Array{
 				Items: nil,
 			},
 			resp: "*-1\r\n",
 			str:  "",
 		},
 		{
-			val: &resp.Array{
-				Items: []resp.Value{
-					resp.SimpleStr("hello"),
-					resp.Integer(10),
+			val: &radio.Array{
+				Items: []radio.Value{
+					radio.SimpleStr("hello"),
+					radio.Integer(10),
 				},
 			},
 			resp: "*2\r\n+hello\r\n:10\r\n",
 			str:  "hello\n10",
 		},
 		{
-			val: &resp.Array{
-				Items: []resp.Value{},
+			val: &radio.Array{
+				Items: []radio.Value{},
 			},
 			resp: "*0\r\n",
 			str:  "",
@@ -103,7 +103,7 @@ func TestBulkStr_IsNil(suite *testing.T) {
 	suite.Parallel()
 
 	suite.Run("WhenEmpty", func(t *testing.T) {
-		bs := &resp.BulkStr{
+		bs := &radio.BulkStr{
 			Value: []byte(""),
 		}
 
@@ -111,7 +111,7 @@ func TestBulkStr_IsNil(suite *testing.T) {
 	})
 
 	suite.Run("WithValue", func(t *testing.T) {
-		bs := &resp.BulkStr{
+		bs := &radio.BulkStr{
 			Value: []byte("helllo"),
 		}
 
@@ -119,7 +119,7 @@ func TestBulkStr_IsNil(suite *testing.T) {
 	})
 
 	suite.Run("WhenNil", func(t *testing.T) {
-		bs := &resp.BulkStr{
+		bs := &radio.BulkStr{
 			Value: nil,
 		}
 
@@ -131,17 +131,17 @@ func TestArray_IsNil(suite *testing.T) {
 	suite.Parallel()
 
 	suite.Run("WhenEmpty", func(t *testing.T) {
-		arr := &resp.Array{
-			Items: []resp.Value{},
+		arr := &radio.Array{
+			Items: []radio.Value{},
 		}
 
 		assert.False(t, arr.IsNil())
 	})
 
 	suite.Run("WithValue", func(t *testing.T) {
-		arr := &resp.Array{
-			Items: []resp.Value{
-				resp.SimpleStr("hello"),
+		arr := &radio.Array{
+			Items: []radio.Value{
+				radio.SimpleStr("hello"),
 			},
 		}
 
@@ -149,7 +149,7 @@ func TestArray_IsNil(suite *testing.T) {
 	})
 
 	suite.Run("WhenNil", func(t *testing.T) {
-		arr := &resp.Array{
+		arr := &radio.Array{
 			Items: nil,
 		}
 

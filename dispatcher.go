@@ -2,8 +2,6 @@ package radio
 
 import (
 	"errors"
-
-	"github.com/spy16/radio/resp"
 )
 
 // ErrUnknownCommand is returned when a handler for a command is not
@@ -20,7 +18,7 @@ type Dispatcher struct {
 
 // Dispatch matches the command name in the arr and calls the appropriate handler
 // registered for the command.
-func (d *Dispatcher) Dispatch(arr []resp.BulkStr) (resp.Value, error) {
+func (d *Dispatcher) Dispatch(arr []BulkStr) (Value, error) {
 	return nil, nil
 }
 

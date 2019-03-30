@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
-	"github.com/spy16/radio/resp"
 )
 
 // New initializes the server
@@ -42,7 +41,7 @@ func (srv *Server) Serve(ctx context.Context, l net.Listener) error {
 }
 
 func (srv *Server) clientLoop(ctx context.Context, con net.Conn) {
-	parser := resp.New(con, true)
+	parser := NewParser(con, true)
 	defer con.Close()
 
 	for {
@@ -58,11 +57,11 @@ func (srv *Server) clientLoop(ctx context.Context, con net.Conn) {
 				break
 			}
 
-			con.Write([]byte(resp.ErrorStr("ERR " + err.Error()).Serialize()))
+			con.Write([]byte(ErrorStr("ERR " + err.Error()).Serialize()))
 			continue
 		}
 
 		spew.Dump(val)
-		con.Write([]byte(resp.SimpleStr("PONG").Serialize()))
+		con.Write([]byte(SimpleStr("PONG").Serialize()))
 	}
 }

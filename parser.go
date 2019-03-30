@@ -1,16 +1,15 @@
-package resp
+package radio
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"strconv"
-
-	"github.com/pkg/errors"
 )
 
-// New initializes an instance of parser with given reader. Reader will be
+// NewParser initializes an instance of parser with given reader. Reader will be
 // buffered using 'bufio.Scanner'.
-func New(rdr io.Reader, inline bool) *Parser {
+func NewParser(rdr io.Reader, inline bool) *Parser {
 	return &Parser{
 		inline: inline,
 		sc:     bufio.NewScanner(rdr),
@@ -24,28 +23,23 @@ func New(rdr io.Reader, inline bool) *Parser {
 	}
 }
 
-// Parser parser a given reader and emits RESP values.
+// Parser is a Redis Serialization Protocol parser.
 type Parser struct {
 	inline    bool
+	inArray   bool
 	sc        *bufio.Scanner
 	consumers map[byte]consumeFunc
-
-	inArray bool
 }
 
-// consumeFunc is responsible for parsing curLine while consuming more
-// tokens from Parser if required and returning a Value.
-type consumeFunc func(par *Parser, curLine string) (Value, error)
-
-// Next reads next set of bytes from the stream and emits the Value.
+// Next reads from the stream and emits the next RESP value.
 func (par *Parser) Next() (Value, error) {
 	if !par.sc.Scan() {
 		err := par.sc.Err()
 		if err == nil {
 			return nil, io.EOF
 		}
-		return nil, err
 
+		return nil, err
 	}
 
 	line := par.sc.Text()
@@ -67,12 +61,18 @@ func (par *Parser) Next() (Value, error) {
 
 	if par.inline && par.inArray {
 		if _, ok := val.(*BulkStr); !ok {
-			return nil, errors.Wrapf(ErrProtocol, "expected '$', got '%c'", val.Serialize()[0])
+			return nil, &ProtocolError{
+				Reason: fmt.Sprintf("expected '$', got '%c'", val.Serialize()[0]),
+			}
 		}
 	}
 
 	return val, nil
 }
+
+// consumeFunc is responsible for parsing curLine while consuming more
+// tokens from Parser if required and returning a Value.
+type consumeFunc func(par *Parser, curLine string) (Value, error)
 
 func consumeSimpleStr(_ *Parser, line string) (Value, error) {
 	return SimpleStr(line[1:]), nil
@@ -85,7 +85,9 @@ func consumeErrorStr(_ *Parser, line string) (Value, error) {
 func consumeInteger(_ *Parser, line string) (Value, error) {
 	val, err := getNum(line)
 	if err != nil {
-		return nil, err
+		return nil, &ProtocolError{
+			Reason: "invalid integer format",
+		}
 	}
 
 	return Integer(val), nil
@@ -94,7 +96,9 @@ func consumeInteger(_ *Parser, line string) (Value, error) {
 func consumeBulkStr(par *Parser, line string) (Value, error) {
 	size, err := getNum(line)
 	if err != nil {
-		return nil, err
+		return nil, &ProtocolError{
+			Reason: "invalid bulk length",
+		}
 	}
 
 	if size == -1 {
@@ -110,7 +114,9 @@ func consumeBulkStr(par *Parser, line string) (Value, error) {
 	}
 
 	if len(read) > size {
-		return nil, ErrProtocol
+		return nil, &ProtocolError{
+			Reason: fmt.Sprintf("required %d bytes for bulk-string, got %d", len(read), size),
+		}
 	}
 
 	if len(read) < size {
@@ -135,7 +141,9 @@ func consumeArray(par *Parser, line string) (Value, error) {
 
 	size, err := getNum(line)
 	if err != nil {
-		return nil, err
+		return nil, &ProtocolError{
+			Reason: "invalid array length",
+		}
 	}
 
 	if size == -1 {
@@ -162,18 +170,7 @@ func consumeArray(par *Parser, line string) (Value, error) {
 func getNum(line string) (int, error) {
 	val, err := strconv.Atoi(line[1:])
 	if err != nil {
-		return 0, ErrNumberFormat
+		return 0, err
 	}
 	return val, nil
-}
-
-func ensureBulkStrArray(arr *Array) error {
-	for _, itm := range arr.Items {
-		_, isBulkStr := itm.(*BulkStr)
-
-		if !isBulkStr {
-		}
-	}
-
-	return nil
 }

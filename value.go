@@ -1,4 +1,4 @@
-package resp
+package radio
 
 import (
 	"fmt"
