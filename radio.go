@@ -1,67 +1,26 @@
 package radio
 
-import (
-	"context"
-	"io"
-	"net"
-	"time"
-
-	"github.com/davecgh/go-spew/spew"
-)
-
-// New initializes the server
-func New() *Server {
-	return &Server{}
+// Handler represents a RESP command handler.
+type Handler interface {
+	ServeRESP(wr ResponseWriter, req *Request)
 }
 
-// Server represents a RESP compatible server.
-type Server struct {
+// ResponseWriter represents a RESP writer object.
+type ResponseWriter interface {
+	Write(v Value) (int, error)
 }
 
-// Serve starts the server loop for accepting client connections.
-func (srv *Server) Serve(ctx context.Context, l net.Listener) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			con, err := l.Accept()
-			if err != nil {
-				return err
-			}
-
-			if tc, ok := con.(*net.TCPConn); ok {
-				tc.SetKeepAlive(true)
-				tc.SetKeepAlivePeriod(10 * time.Minute)
-			}
-
-			go srv.clientLoop(ctx, con)
-		}
-	}
+// Request represents a RESP request.
+type Request struct {
+	Command string
+	Args    []BulkStr
+	Value   Value
 }
 
-func (srv *Server) clientLoop(ctx context.Context, con net.Conn) {
-	parser := NewParser(con, true)
-	defer con.Close()
+// HandlerFunc implements Handler interface using a function type.
+type HandlerFunc func(wr ResponseWriter, req *Request)
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		val, err := parser.Next()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-
-			con.Write([]byte(ErrorStr("ERR " + err.Error()).Serialize()))
-			continue
-		}
-
-		spew.Dump(val)
-		con.Write([]byte(SimpleStr("PONG").Serialize()))
-	}
+// ServeRESP dispatches the request to the wrapped function.
+func (handlerFunc HandlerFunc) ServeRESP(wr ResponseWriter, req *Request) {
+	handlerFunc(wr, req)
 }

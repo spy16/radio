@@ -43,6 +43,10 @@ func (par *Parser) Next() (Value, error) {
 	}
 
 	line := par.sc.Text()
+	if line == "" {
+		return par.Next()
+	}
+
 	prefix := line[0]
 
 	if par.inline && prefix != '*' && !par.inArray {
