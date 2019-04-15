@@ -23,11 +23,6 @@ func TestSerialize(suite *testing.T) {
 			str:  "hello",
 		},
 		{
-			val:  radio.InlineStr("hello"),
-			resp: "+hello\r\n",
-			str:  "hello",
-		},
-		{
 			val:  radio.Integer(10),
 			resp: ":10\r\n",
 			str:  "10",

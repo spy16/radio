@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// ListenAndServe starts a RESP server on the given listener. Commands will
-// be dispatched to appropriate handlers using the dispatcher.
+// ListenAndServe starts a RESP server on the given listener. Parsed requests will
+// be passed to the given handler.
 func ListenAndServe(ctx context.Context, l net.Listener, handler Handler) error {
 	for {
 		select {

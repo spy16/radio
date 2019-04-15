@@ -36,17 +36,6 @@ func (es ErrorStr) Serialize() string {
 	return fmt.Sprintf("-%s\r\n", string(es))
 }
 
-// InlineStr represents a non-prefixed inline string.
-// Refer https://redis.io/topics/protocol#inline-commands
-type InlineStr string
-
-// Serialize returns the inlined string formatted as simple-string.
-// Note: This is NOT part of the RESP specification since, inline
-// strings are only defined in requests and not in response.
-func (is InlineStr) Serialize() string {
-	return fmt.Sprintf("+%s\r\n", string(is))
-}
-
 // Integer represents RESP integer value.
 // Refer https://redis.io/topics/protocol#resp-integers
 type Integer int
