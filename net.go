@@ -32,12 +32,9 @@ func ListenAndServe(ctx context.Context, l net.Listener, handler Handler) error 
 }
 
 func clientLoop(ctx context.Context, rwc io.ReadWriteCloser, handler Handler) {
-	parser := NewParser(rwc, true)
+	rdr := NewReader(rwc)
+	rw := NewWriter(rwc)
 	defer rwc.Close()
-
-	rw := &respWriter{
-		w: rwc,
-	}
 
 	for {
 		select {
@@ -46,27 +43,19 @@ func clientLoop(ctx context.Context, rwc io.ReadWriteCloser, handler Handler) {
 		default:
 		}
 
-		val, err := parser.Next()
+		mb, err := rdr.Read()
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
 
-			rwc.Write([]byte(ErrorStr("ERR " + err.Error()).Serialize()))
+			rw.Write(ErrorStr("ERR " + err.Error()))
 			continue
 		}
 
 		handler.ServeRESP(rw, &Request{
 			Command: "PING",
-			Value:   val,
+			Value:   mb,
 		})
 	}
-}
-
-type respWriter struct {
-	w io.Writer
-}
-
-func (rw *respWriter) Write(v Value) (int, error) {
-	return rw.w.Write([]byte(v.Serialize()))
 }
