@@ -10,14 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWriter_Write(t *testing.T) {
-	b := &bytes.Buffer{}
-	wr := radio.NewWriter(b)
-	wr.Write(radio.SimpleStr("hello"))
-
-	assert.Equal(t, "+hello\r\n", b.String())
-}
-
 func TestReader_Read(suite *testing.T) {
 	suite.Parallel()
 
