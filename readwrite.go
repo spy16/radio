@@ -15,6 +15,16 @@ func NewReader(reader io.Reader) *Reader {
 	return &Reader{
 		ir:  reader,
 		buf: make([]byte, bufSz),
+		sz:  bufSz,
+	}
+}
+
+// NewReaderSize initializes the reader with given buffer size.
+func NewReaderSize(reader io.Reader, size int) *Reader {
+	return &Reader{
+		ir:  reader,
+		buf: make([]byte, size),
+		sz:  size,
 	}
 }
 
@@ -91,6 +101,13 @@ func (rd *Reader) readMultiBulk(mb *MultiBulk) error {
 		return err
 	}
 
+	if size >= 0 {
+		mb.Items = []BulkStr{}
+	} else {
+		// negative size -> nil multi-bulk
+		return nil
+	}
+
 	for i := 0; i < int(size); i++ {
 		itm, err := rd.readBulkStr()
 		if err != nil {
@@ -116,6 +133,10 @@ func (rd *Reader) readBulkStr() (*BulkStr, error) {
 	size, err := rd.readNumber()
 	if err != nil {
 		return nil, err
+	}
+
+	if size < 0 {
+		return &BulkStr{}, nil
 	}
 
 	data, err := rd.readExactly(size)
@@ -180,15 +201,24 @@ func (rd *Reader) buffer(force bool) error {
 	if err != nil {
 		return err
 	}
-	rd.end = n
+	rd.end += n
 
 	return nil
 }
 
 func toInt(data []byte) (int, error) {
-	var d int
+	var d, sign int
 	L := len(data)
 	for i, b := range data {
+		if i == 0 {
+			if b == '-' {
+				sign = -1
+				continue
+			}
+
+			sign = 1
+		}
+
 		if b < '0' || b > '9' {
 			return 0, errors.New("invalid number format")
 		}
@@ -202,5 +232,5 @@ func toInt(data []byte) (int, error) {
 		d += int(b-'0') * pos
 	}
 
-	return d, nil
+	return sign * d, nil
 }
