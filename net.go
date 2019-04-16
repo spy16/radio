@@ -53,9 +53,21 @@ func clientLoop(ctx context.Context, rwc io.ReadWriteCloser, handler Handler) {
 			continue
 		}
 
-		handler.ServeRESP(rw, &Request{
-			Command: "PING",
-			Value:   mb,
-		})
+		req := newRequest(mb)
+		if req != nil {
+			handler.ServeRESP(rw, req)
+		}
+	}
+}
+
+func newRequest(mb *MultiBulk) *Request {
+	if mb.IsNil() || len(mb.Items) == 0 {
+		return nil
+	}
+
+	return &Request{
+		Command: mb.Items[0].String(),
+		Args:    mb.Items[1:],
+		Value:   mb,
 	}
 }

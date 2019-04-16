@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 
@@ -26,7 +27,14 @@ func main() {
 }
 
 func serveRESP(wr radio.ResponseWriter, req *radio.Request) {
-	if req.Command == "PING" {
+	switch req.Command {
+	case "ping":
 		wr.Write(radio.SimpleStr("PONG"))
+
+	case "COMMAND":
+		wr.Write(&radio.Array{})
+
+	default:
+		wr.Write(radio.ErrorStr(fmt.Sprintf("unknown command '%s'", req.Command)))
 	}
 }
