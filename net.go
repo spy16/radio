@@ -32,7 +32,7 @@ func ListenAndServe(ctx context.Context, l net.Listener, handler Handler) error 
 }
 
 func clientLoop(ctx context.Context, rwc io.ReadWriteCloser, handler Handler) {
-	rdr := NewReader(rwc)
+	rdr := NewReader(rwc, true)
 	rw := NewWriter(rwc)
 	defer rwc.Close()
 
@@ -60,7 +60,12 @@ func clientLoop(ctx context.Context, rwc io.ReadWriteCloser, handler Handler) {
 	}
 }
 
-func newRequest(mb *MultiBulk) *Request {
+func newRequest(v Value) *Request {
+	mb, ok := v.(*MultiBulk)
+	if !ok {
+		return nil
+	}
+
 	if mb.IsNil() || len(mb.Items) == 0 {
 		return nil
 	}

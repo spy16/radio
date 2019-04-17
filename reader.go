@@ -8,53 +8,78 @@ import (
 	"math"
 )
 
-const bufSz = 4096
+const defaultBufSize = 4096
 
 // NewReader initializes the reader with default buffer size.
-func NewReader(reader io.Reader) *Reader {
+func NewReader(reader io.Reader, serverMode bool) *Reader {
 	return &Reader{
-		bufferedReader: &bufferedReader{
-			ir:  reader,
-			buf: make([]byte, bufSz),
-			sz:  bufSz,
-		},
+		ir:         reader,
+		buf:        make([]byte, defaultBufSize),
+		sz:         defaultBufSize,
+		serverMode: serverMode,
 	}
 }
 
-// NewReaderSize initializes the reader with given buffer size.
-func NewReaderSize(reader io.Reader, size int) *Reader {
-	return &Reader{
-		bufferedReader: &bufferedReader{
-			ir:  reader,
-			buf: make([]byte, size),
-			sz:  size,
-		},
-	}
-}
-
-// Reader implements server-side RESP protocol parsing.
+// Reader implements both Server side and Client side RESP protocol parsing.
 type Reader struct {
-	*bufferedReader
+	ir    io.Reader
+	start int
+	end   int
+	buf   []byte
+	sz    int
+
+	serverMode bool
 }
 
-// Read reads the next command available from the stream.
-func (rd *Reader) Read() (*MultiBulk, error) {
+func (rd *Reader) Read() (Value, error) {
 	if err := rd.buffer(false); err != nil {
 		return nil, err
 	}
 
-	var mb MultiBulk
-	if rd.buf[rd.start] == '*' {
-		if err := rd.readMultiBulk(&mb); err != nil {
+	prefix := rd.buf[rd.start]
+	if rd.serverMode {
+		var mb MultiBulk
+		var err error
+		if prefix == '*' {
+			err = rd.readMultiBulk(&mb)
+		} else {
+			err = rd.readInline(&mb)
+		}
+
+		if err != nil {
 			return nil, err
 		}
-	} else {
-		if err := rd.readInline(&mb); err != nil {
-			return nil, err
-		}
+
+		return &mb, nil
 	}
 
-	return &mb, nil
+	switch rd.buf[rd.start] {
+	case '+':
+		return rd.readSimpleStr()
+
+	case '-':
+		return rd.readErrorStr()
+
+	case ':':
+		return rd.readInteger()
+
+	case '$':
+		bs, err := rd.readBulkStr()
+		if err != nil {
+			return nil, err
+		}
+		return bs, nil
+
+	case '*':
+		arr, err := rd.readArray()
+		if err != nil {
+			return nil, err
+		}
+		return arr, nil
+
+	}
+
+	return nil, fmt.Errorf("unexpected byte '%c'", rd.buf[rd.start])
 }
 
 func (rd *Reader) readMultiBulk(mb *MultiBulk) error {
@@ -84,15 +109,7 @@ func (rd *Reader) readMultiBulk(mb *MultiBulk) error {
 	return nil
 }
 
-type bufferedReader struct {
-	ir    io.Reader
-	start int
-	end   int
-	buf   []byte
-	sz    int
-}
-
-func (rd *bufferedReader) readNumber() (int, error) {
+func (rd *Reader) readNumber() (int, error) {
 	data, err := rd.readTillCRLF()
 	if err != nil {
 		return 0, err
@@ -105,66 +122,7 @@ func (rd *bufferedReader) readNumber() (int, error) {
 	return toInt(data)
 }
 
-func (rd *bufferedReader) readExactly(n int) ([]byte, error) {
-	for rd.end-rd.start < n {
-		if err := rd.buffer(true); err != nil {
-			return nil, err
-		}
-	}
-
-	data := rd.buf[rd.start : rd.start+n]
-	rd.start += n
-	return data, nil
-}
-
-func (rd *bufferedReader) readTillCRLF() ([]byte, error) {
-	var crlf int
-	for crlf = bytes.Index(rd.buf[rd.start:rd.end], []byte("\r\n")); crlf < 0; {
-		if err := rd.buffer(true); err != nil {
-			if err == io.EOF {
-				break
-			}
-
-			return nil, err
-		}
-	}
-
-	if crlf == 0 {
-		return []byte(""), nil
-	} else if crlf < 0 {
-		data := rd.buf[rd.start:rd.end]
-		rd.start = rd.end
-		return data, io.EOF
-	}
-
-	data := make([]byte, crlf)
-	copy(data, rd.buf[rd.start:rd.end])
-	rd.start += crlf + 2
-	return data, nil
-}
-
-func (rd *bufferedReader) buffer(force bool) error {
-	if !force && rd.end > rd.start {
-		return nil // buffer already has some data.
-	}
-
-	if rd.end > 0 && rd.start >= rd.end {
-		rd.start = 0
-		rd.end = 0
-	} else if rd.end == len(rd.buf) {
-		rd.buf = append(rd.buf, make([]byte, rd.sz)...)
-	}
-
-	n, err := rd.ir.Read(rd.buf[rd.end:])
-	if err != nil {
-		return err
-	}
-	rd.end += n
-
-	return nil
-}
-
-func (rd *bufferedReader) readInline(mb *MultiBulk) error {
+func (rd *Reader) readInline(mb *MultiBulk) error {
 	var crlf int
 	for crlf = bytes.Index(rd.buf[rd.start:rd.end], []byte("\r\n")); crlf < 0; {
 		if err := rd.buffer(true); err != nil {
@@ -183,7 +141,55 @@ func (rd *bufferedReader) readInline(mb *MultiBulk) error {
 	return nil
 }
 
-func (rd *bufferedReader) readBulkStr() (*BulkStr, error) {
+func (rd *Reader) readInteger() (Integer, error) {
+	rd.start++ // skip over ':'
+
+	n, err := rd.readNumber()
+	return Integer(n), err
+}
+
+func (rd *Reader) readArray() (*Array, error) {
+	rd.start++ // skip over '+'
+
+	size, err := rd.readNumber()
+	if err != nil {
+		return nil, err
+	}
+
+	if size < 0 {
+		return &Array{}, nil
+	}
+
+	arr := &Array{}
+	arr.Items = []Value{}
+
+	for i := 0; i < size; i++ {
+		item, err := rd.Read()
+		if err != nil {
+			return nil, err
+		}
+
+		arr.Items = append(arr.Items, item)
+	}
+
+	return arr, nil
+}
+
+func (rd *Reader) readSimpleStr() (SimpleStr, error) {
+	rd.start++ // skip over '+'
+
+	data, err := rd.readTillCRLF()
+	return SimpleStr(data), err
+}
+
+func (rd *Reader) readErrorStr() (ErrorStr, error) {
+	rd.start++ // skip over '-'
+
+	data, err := rd.readTillCRLF()
+	return ErrorStr(data), err
+}
+
+func (rd *Reader) readBulkStr() (*BulkStr, error) {
 	if err := rd.buffer(false); err != nil {
 		return nil, err
 	}
@@ -211,6 +217,65 @@ func (rd *bufferedReader) readBulkStr() (*BulkStr, error) {
 	return &BulkStr{
 		Value: data,
 	}, nil
+}
+
+func (rd *Reader) readExactly(n int) ([]byte, error) {
+	for rd.end-rd.start < n {
+		if err := rd.buffer(true); err != nil {
+			return nil, err
+		}
+	}
+
+	data := rd.buf[rd.start : rd.start+n]
+	rd.start += n
+	return data, nil
+}
+
+func (rd *Reader) readTillCRLF() ([]byte, error) {
+	var crlf int
+	for crlf = bytes.Index(rd.buf[rd.start:rd.end], []byte("\r\n")); crlf < 0; {
+		if err := rd.buffer(true); err != nil {
+			if err == io.EOF {
+				break
+			}
+
+			return nil, err
+		}
+	}
+
+	if crlf == 0 {
+		return []byte(""), nil
+	} else if crlf < 0 {
+		data := rd.buf[rd.start:rd.end]
+		rd.start = rd.end
+		return data, io.EOF
+	}
+
+	data := make([]byte, crlf)
+	copy(data, rd.buf[rd.start:rd.end])
+	rd.start += crlf + 2
+	return data, nil
+}
+
+func (rd *Reader) buffer(force bool) error {
+	if !force && rd.end > rd.start {
+		return nil // buffer already has some data.
+	}
+
+	if rd.end > 0 && rd.start >= rd.end {
+		rd.start = 0
+		rd.end = 0
+	} else if rd.end == len(rd.buf) {
+		rd.buf = append(rd.buf, make([]byte, rd.sz)...)
+	}
+
+	n, err := rd.ir.Read(rd.buf[rd.end:])
+	if err != nil {
+		return err
+	}
+	rd.end += n
+
+	return nil
 }
 
 func toInt(data []byte) (int, error) {
