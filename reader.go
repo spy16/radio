@@ -35,8 +35,6 @@ func NewReaderSize(reader io.Reader, size int) *Reader {
 // Reader implements server-side RESP protocol parsing.
 type Reader struct {
 	*bufferedReader
-
-	input bool
 }
 
 // Read reads the next command available from the stream.
@@ -86,35 +84,6 @@ func (rd *Reader) readMultiBulk(mb *MultiBulk) error {
 	return nil
 }
 
-func toInt(data []byte) (int, error) {
-	var d, sign int
-	L := len(data)
-	for i, b := range data {
-		if i == 0 {
-			if b == '-' {
-				sign = -1
-				continue
-			}
-
-			sign = 1
-		}
-
-		if b < '0' || b > '9' {
-			return 0, errors.New("invalid number format")
-		}
-
-		if b == '0' {
-			continue
-		}
-
-		pos := int(math.Pow(10, float64(L-i-1)))
-
-		d += int(b-'0') * pos
-	}
-
-	return sign * d, nil
-}
-
 type bufferedReader struct {
 	ir    io.Reader
 	start int
@@ -127,6 +96,10 @@ func (rd *bufferedReader) readNumber() (int, error) {
 	data, err := rd.readTillCRLF()
 	if err != nil {
 		return 0, err
+	}
+
+	if len(data) == 0 {
+		return 0, errors.New("no number")
 	}
 
 	return toInt(data)
@@ -148,8 +121,20 @@ func (rd *bufferedReader) readTillCRLF() ([]byte, error) {
 	var crlf int
 	for crlf = bytes.Index(rd.buf[rd.start:rd.end], []byte("\r\n")); crlf < 0; {
 		if err := rd.buffer(true); err != nil {
+			if err == io.EOF {
+				break
+			}
+
 			return nil, err
 		}
+	}
+
+	if crlf == 0 {
+		return []byte(""), nil
+	} else if crlf < 0 {
+		data := rd.buf[rd.start:rd.end]
+		rd.start = rd.end
+		return data, io.EOF
 	}
 
 	data := make([]byte, crlf)
@@ -226,4 +211,32 @@ func (rd *bufferedReader) readBulkStr() (*BulkStr, error) {
 	return &BulkStr{
 		Value: data,
 	}, nil
+}
+
+func toInt(data []byte) (int, error) {
+	var d, sign int
+	L := len(data)
+	for i, b := range data {
+		if i == 0 {
+			if b == '-' {
+				sign = -1
+				continue
+			}
+
+			sign = 1
+		}
+
+		if b < '0' || b > '9' {
+			return 0, errors.New("invalid number format")
+		}
+
+		if b == '0' {
+			continue
+		}
+
+		pos := int(math.Pow(10, float64(L-i-1)))
+		d += int(b-'0') * pos
+	}
+
+	return sign * d, nil
 }
