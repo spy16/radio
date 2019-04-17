@@ -77,29 +77,6 @@ func TestSerialize(suite *testing.T) {
 			resp: "*0\r\n",
 			str:  "",
 		},
-		{
-			val:  &radio.MultiBulk{},
-			resp: "*-1\r\n",
-			str:  "",
-		},
-		{
-			val: &radio.MultiBulk{
-				Items: []radio.BulkStr{},
-			},
-			resp: "*0\r\n",
-			str:  "",
-		},
-		{
-			val: &radio.MultiBulk{
-				Items: []radio.BulkStr{
-					{
-						Value: []byte("hello"),
-					},
-				},
-			},
-			resp: "*1\r\n$5\r\nhello\r\n",
-			str:  "hello",
-		},
 	}
 
 	for _, cs := range cases {

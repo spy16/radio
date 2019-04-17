@@ -2,8 +2,10 @@ package radio
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
+	"reflect"
 	"time"
 )
 
@@ -43,36 +45,53 @@ func clientLoop(ctx context.Context, rwc io.ReadWriteCloser, handler Handler) {
 		default:
 		}
 
-		mb, err := rdr.Read()
+		val, err := rdr.Read()
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
 
 			rw.Write(ErrorStr("ERR " + err.Error()))
+			return
+		}
+
+		req, err := newRequest(val)
+		if err != nil {
+			rw.Write(ErrorStr("ERR " + err.Error()))
+			return
+		}
+
+		if req == nil {
 			continue
 		}
 
-		req := newRequest(mb)
-		if req != nil {
-			handler.ServeRESP(rw, req)
-		}
+		handler.ServeRESP(rw, req)
 	}
 }
 
-func newRequest(v Value) *Request {
-	mb, ok := v.(*MultiBulk)
+func newRequest(val Value) (*Request, error) {
+	arr, ok := val.(*Array)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 
-	if mb.IsNil() || len(mb.Items) == 0 {
-		return nil
+	if arr.IsNil() || len(arr.Items) == 0 {
+		return nil, nil
 	}
 
-	return &Request{
-		Command: mb.Items[0].String(),
-		Args:    mb.Items[1:],
-		Value:   mb,
+	req := &Request{}
+	for i, itm := range arr.Items {
+		v, ok := itm.(*BulkStr)
+		if !ok {
+			return nil, fmt.Errorf("unexpected type '%s'", reflect.TypeOf(itm))
+		}
+
+		if i == 0 {
+			req.Command = v.String()
+		} else {
+			req.Args = append(req.Args, v.String())
+		}
 	}
+
+	return req, nil
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 
 	"github.com/spy16/radio"
 )
@@ -35,6 +36,6 @@ func serveRESP(wr radio.ResponseWriter, req *radio.Request) {
 		wr.Write(&radio.Array{})
 
 	default:
-		wr.Write(radio.ErrorStr(fmt.Sprintf("unknown command '%s'", req.Command)))
+		wr.Write(radio.ErrorStr(fmt.Sprintf("ERR unknown command '%s'", strings.Replace(req.Command, "\r\n", " ", -1))))
 	}
 }

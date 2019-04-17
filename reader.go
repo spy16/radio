@@ -30,7 +30,12 @@ func NewReaderSize(r io.Reader, isServer bool, size int) *Reader {
 	}
 }
 
-// Reader implements server and client RESP protocol parser.
+// Reader implements server and client RESP protocol parser. IsServer
+// flag controls the RESP parsing mode.
+// - When IsServer set to true, only Multi Bulk (Array of Bulk strings)
+//   and inline commands are supported.
+// - When IsServer set to false, all RESP values are enabled.
+// Read https://redis.io/topics/protocol for RESP protocol specification.
 type Reader struct {
 	ir      io.Reader
 	start   int
@@ -39,6 +44,7 @@ type Reader struct {
 	sz      int
 	inArray bool
 
+	// IsServer controls the RESP parsing mode.
 	IsServer bool
 }
 
@@ -108,6 +114,11 @@ func (rd *Reader) Read() (Value, error) {
 // reader is configured with.
 func (rd *Reader) Size() (minSize int, currentSize int) {
 	return rd.sz, len(rd.buf)
+}
+
+// Discard discards the contents of the buffer.
+func (rd *Reader) Discard() {
+	rd.start = rd.end
 }
 
 func (rd *Reader) readSimpleStr() (SimpleStr, error) {
@@ -229,7 +240,7 @@ func (rd *Reader) readExactly(n int) ([]byte, error) {
 	}
 
 	data := rd.buf[rd.start : rd.start+n]
-	rd.start += n
+	rd.start += n + 1
 	return data, nil
 }
 
@@ -237,24 +248,16 @@ func (rd *Reader) readTillCRLF() ([]byte, error) {
 	var crlf int
 	for crlf = bytes.Index(rd.buf[rd.start:rd.end], []byte("\r\n")); crlf < 0; {
 		if err := rd.buffer(true); err != nil {
-			if err == io.EOF {
-				break
-			}
-
 			return nil, err
 		}
 	}
 
 	if crlf == 0 {
 		return []byte(""), nil
-	} else if crlf < 0 {
-		data := rd.buf[rd.start:rd.end]
-		rd.start = rd.end
-		return data, io.EOF
 	}
 
 	data := make([]byte, crlf)
-	copy(data, rd.buf[rd.start:rd.end])
+	copy(data, rd.buf[rd.start:rd.start+crlf])
 	rd.start += crlf + 2
 	return data, nil
 }

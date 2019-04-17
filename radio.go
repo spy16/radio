@@ -13,8 +13,7 @@ type ResponseWriter interface {
 // Request represents a RESP request.
 type Request struct {
 	Command string
-	Args    []BulkStr
-	Value   Value
+	Args    []string
 }
 
 // HandlerFunc implements Handler interface using a function type.

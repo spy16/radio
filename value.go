@@ -107,37 +107,3 @@ func (arr *Array) String() string {
 
 	return strings.Join(strs, "\n")
 }
-
-// MultiBulk represents an array of Bulk strings. It is used to
-// represent the commands sent by the client as per RESP protocol.
-type MultiBulk struct {
-	Items []BulkStr
-}
-
-// Serialize the MultiBulk as an Array of Bulk-Strings.
-func (mb *MultiBulk) Serialize() string {
-	if mb.IsNil() {
-		return "*-1\r\n"
-	}
-
-	ser := fmt.Sprintf("*%d\r\n", len(mb.Items))
-	for _, itm := range mb.Items {
-		ser += itm.Serialize()
-	}
-
-	return ser
-}
-
-// IsNil returns true if this is a null array.
-func (mb *MultiBulk) IsNil() bool {
-	return mb.Items == nil
-}
-
-func (mb *MultiBulk) String() string {
-	var s string
-	for _, itm := range mb.Items {
-		s += itm.String() + "\n"
-	}
-
-	return strings.TrimSpace(s)
-}
