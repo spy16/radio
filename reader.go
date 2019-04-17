@@ -10,135 +10,126 @@ import (
 
 const defaultBufSize = 4096
 
-// NewReader initializes the reader with default buffer size.
-func NewReader(reader io.Reader, serverMode bool) *Reader {
+// NewReader initializes the RESP reader with given reader. In server mode,
+// input data will be read line-by-line except in case of array of bulkstrings.
+//
+// Read https://redis.io/topics/protocol#sending-commands-to-a-redis-server for
+// more information on how clients interact with server.
+func NewReader(r io.Reader, isServer bool) *Reader {
+	return NewReaderSize(r, isServer, defaultBufSize)
+}
+
+// NewReaderSize initializes the RESP reader with given buffer size.
+// See NewReader for more information.
+func NewReaderSize(r io.Reader, isServer bool, size int) *Reader {
 	return &Reader{
-		ir:         reader,
-		buf:        make([]byte, defaultBufSize),
-		sz:         defaultBufSize,
-		serverMode: serverMode,
+		ir:       r,
+		IsServer: isServer,
+		buf:      make([]byte, size),
+		sz:       size,
 	}
 }
 
-// Reader implements both Server side and Client side RESP protocol parsing.
+// Reader implements server and client RESP protocol parser.
 type Reader struct {
-	ir    io.Reader
-	start int
-	end   int
-	buf   []byte
-	sz    int
+	ir      io.Reader
+	start   int
+	end     int
+	buf     []byte
+	sz      int
+	inArray bool
 
-	serverMode bool
+	IsServer bool
 }
 
+// Read reads next RESP value from the stream.
 func (rd *Reader) Read() (Value, error) {
 	if err := rd.buffer(false); err != nil {
 		return nil, err
 	}
-
 	prefix := rd.buf[rd.start]
-	if rd.serverMode {
-		var mb MultiBulk
-		var err error
-		if prefix == '*' {
-			err = rd.readMultiBulk(&mb)
-		} else {
-			err = rd.readInline(&mb)
+
+	if rd.IsServer {
+		if rd.inArray && prefix != '$' {
+			return nil, fmt.Errorf("Protocol error: expecting '$', got '%c'", prefix)
 		}
 
+		if prefix != '*' && prefix != '$' {
+			v, err := rd.readInline()
+			if err != nil {
+				return nil, err
+			}
+			return v, nil
+		}
+	}
+
+	switch prefix {
+	case '+':
+		v, err := rd.readSimpleStr()
 		if err != nil {
 			return nil, err
 		}
-
-		return &mb, nil
-	}
-
-	switch rd.buf[rd.start] {
-	case '+':
-		return rd.readSimpleStr()
+		return v, nil
 
 	case '-':
-		return rd.readErrorStr()
+		v, err := rd.readErrorStr()
+		if err != nil {
+			return nil, err
+		}
+		return v, nil
 
 	case ':':
-		return rd.readInteger()
+		v, err := rd.readInteger()
+		if err != nil {
+			return nil, err
+		}
+
+		return v, nil
 
 	case '$':
-		bs, err := rd.readBulkStr()
+		v, err := rd.readBulkStr()
 		if err != nil {
 			return nil, err
 		}
-		return bs, nil
+		return v, nil
 
 	case '*':
-		arr, err := rd.readArray()
+		v, err := rd.readArray()
 		if err != nil {
 			return nil, err
 		}
-		return arr, nil
-
+		return v, nil
 	}
 
-	return nil, fmt.Errorf("unexpected byte '%c'", rd.buf[rd.start])
+	return nil, fmt.Errorf("bad prefix '%c'", prefix)
 }
 
-func (rd *Reader) readMultiBulk(mb *MultiBulk) error {
-	rd.start++ // skip the '*' character
-
-	size, err := rd.readNumber()
-	if err != nil {
-		return err
-	}
-
-	if size >= 0 {
-		mb.Items = []BulkStr{}
-	} else {
-		// negative size -> nil multi-bulk
-		return nil
-	}
-
-	for i := 0; i < int(size); i++ {
-		itm, err := rd.readBulkStr()
-		if err != nil {
-			return err
-		}
-
-		mb.Items = append(mb.Items, *itm)
-	}
-
-	return nil
+// Size returns the current buffer size and the minimum buffer size
+// reader is configured with.
+func (rd *Reader) Size() (minSize int, currentSize int) {
+	return rd.sz, len(rd.buf)
 }
 
-func (rd *Reader) readNumber() (int, error) {
+func (rd *Reader) readSimpleStr() (SimpleStr, error) {
+	rd.start++ // skip over '+'
+
 	data, err := rd.readTillCRLF()
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 
-	if len(data) == 0 {
-		return 0, errors.New("no number")
-	}
-
-	return toInt(data)
+	return SimpleStr(data), nil
 }
 
-func (rd *Reader) readInline(mb *MultiBulk) error {
-	var crlf int
-	for crlf = bytes.Index(rd.buf[rd.start:rd.end], []byte("\r\n")); crlf < 0; {
-		if err := rd.buffer(true); err != nil {
-			return err
-		}
+func (rd *Reader) readErrorStr() (ErrorStr, error) {
+	rd.start++ // skip over '-'
+
+	data, err := rd.readTillCRLF()
+	if err != nil {
+		return "", err
 	}
 
-	// TODO: split the string using space as delimiter while
-	// taking escape sequences into consideration.
-
-	mb.Items = append(mb.Items, BulkStr{
-		Value: rd.buf[rd.start : rd.start+crlf],
-	})
-	rd.start += crlf + 2
-
-	return nil
+	return ErrorStr(data), nil
 }
 
 func (rd *Reader) readInteger() (Integer, error) {
@@ -148,11 +139,66 @@ func (rd *Reader) readInteger() (Integer, error) {
 	return Integer(n), err
 }
 
+func (rd *Reader) readInline() (*Array, error) {
+	data, err := rd.readTillCRLF()
+	if err != nil {
+		return nil, err
+	}
+
+	return &Array{
+		Items: []Value{
+			&BulkStr{
+				Value: data,
+			},
+		},
+	}, nil
+}
+
+func (rd *Reader) readBulkStr() (*BulkStr, error) {
+	rd.start++ // skip over '$'
+
+	size, err := rd.readNumber()
+	if err != nil {
+		if rd.IsServer && (err == errInvalidNumber || err == errNoNumber) {
+			return nil, errors.New("Protocol error: invalid bulk length")
+		}
+		return nil, err
+	}
+
+	if size < 0 {
+		if rd.IsServer {
+			return nil, errors.New("Protocol error: invalid bulk length")
+		}
+
+		// -1 (negative size) means a null bulk string
+		// Refer https://redis.io/topics/protocol#resp-bulk-strings
+		return &BulkStr{}, nil
+	}
+
+	data, err := rd.readExactly(size)
+	if err != nil {
+		return nil, err
+	}
+	rd.start += 2 // skip over CRLF
+
+	return &BulkStr{
+		Value: data,
+	}, nil
+}
+
 func (rd *Reader) readArray() (*Array, error) {
+	rd.inArray = true
+	defer func() {
+		rd.inArray = false
+	}()
 	rd.start++ // skip over '+'
 
 	size, err := rd.readNumber()
 	if err != nil {
+		if rd.IsServer && (err == errInvalidNumber || err == errNoNumber) {
+			return nil, errors.New("Protocol error: invalid multibulk length")
+		}
+
 		return nil, err
 	}
 
@@ -173,50 +219,6 @@ func (rd *Reader) readArray() (*Array, error) {
 	}
 
 	return arr, nil
-}
-
-func (rd *Reader) readSimpleStr() (SimpleStr, error) {
-	rd.start++ // skip over '+'
-
-	data, err := rd.readTillCRLF()
-	return SimpleStr(data), err
-}
-
-func (rd *Reader) readErrorStr() (ErrorStr, error) {
-	rd.start++ // skip over '-'
-
-	data, err := rd.readTillCRLF()
-	return ErrorStr(data), err
-}
-
-func (rd *Reader) readBulkStr() (*BulkStr, error) {
-	if err := rd.buffer(false); err != nil {
-		return nil, err
-	}
-
-	if rd.buf[rd.start] != '$' {
-		return nil, fmt.Errorf("Protocol error: expecting '$', got '%c'", rd.buf[rd.start])
-	}
-	rd.start++
-
-	size, err := rd.readNumber()
-	if err != nil {
-		return nil, err
-	}
-
-	if size < 0 {
-		return &BulkStr{}, nil
-	}
-
-	data, err := rd.readExactly(size)
-	if err != nil {
-		return nil, err
-	}
-	rd.start += 2 // skip over CRLF
-
-	return &BulkStr{
-		Value: data,
-	}, nil
 }
 
 func (rd *Reader) readExactly(n int) ([]byte, error) {
@@ -257,6 +259,19 @@ func (rd *Reader) readTillCRLF() ([]byte, error) {
 	return data, nil
 }
 
+func (rd *Reader) readNumber() (int, error) {
+	data, err := rd.readTillCRLF()
+	if err != nil {
+		return 0, err
+	}
+
+	if len(data) == 0 {
+		return 0, errNoNumber
+	}
+
+	return toInt(data)
+}
+
 func (rd *Reader) buffer(force bool) error {
 	if !force && rd.end > rd.start {
 		return nil // buffer already has some data.
@@ -292,7 +307,7 @@ func toInt(data []byte) (int, error) {
 		}
 
 		if b < '0' || b > '9' {
-			return 0, errors.New("invalid number format")
+			return 0, errInvalidNumber
 		}
 
 		if b == '0' {
@@ -305,3 +320,8 @@ func toInt(data []byte) (int, error) {
 
 	return sign * d, nil
 }
+
+var (
+	errInvalidNumber = errors.New("invalid number format")
+	errNoNumber      = errors.New("no number")
+)

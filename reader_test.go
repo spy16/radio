@@ -3,145 +3,174 @@ package radio_test
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/spy16/radio"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-func TestReader_Read(suite *testing.T) {
+func TestNewReader(suite *testing.T) {
 	suite.Parallel()
 
-	cases := []struct {
-		data string
-		val  radio.Value
-		err  error
-	}{
+	suite.Run("WithServerMode", func(t *testing.T) {
+		rd := radio.NewReader(bytes.NewBufferString("hello"), true)
+		if rd == nil {
+			t.Errorf("return value must not be nil")
+		}
+		if !rd.IsServer {
+			t.Errorf("reader expected to be in server mode, but in client mode")
+		}
+	})
+
+	suite.Run("WithClientMode", func(t *testing.T) {
+		rd := radio.NewReader(bytes.NewBufferString("hello"), false)
+		if rd == nil {
+			t.Errorf("return value must not be nil")
+		}
+		if rd.IsServer {
+			t.Errorf("reader expected to be in client mode, but in server mode")
+		}
+	})
+
+	suite.Run("WithSize", func(t *testing.T) {
+		rd := radio.NewReaderSize(bytes.NewBufferString("hello"), false, 10)
+		if rd == nil {
+			t.Errorf("return value must not be nil")
+		}
+		if rd.IsServer {
+			t.Errorf("reader expected to be in client mode, but in server mode")
+		}
+
+		minSz, curSz := rd.Size()
+		if minSz != 10 {
+			t.Errorf("expected minimum buffer size to be 10, got %d", minSz)
+		}
+
+		if curSz != 10 {
+			t.Errorf("expected current buffer size to be 10, got %d", curSz)
+		}
+	})
+}
+
+func TestReader_Read_ClientMode(suite *testing.T) {
+	suite.Parallel()
+
+	cases := []readTestCase{
 		{
-			data: "",
-			val:  nil,
-			err:  io.EOF,
+			title: "NoInput",
+			input: "",
+			val:   nil,
+			err:   io.EOF,
 		},
 		{
-			data: "+hello\r\n",
-			val:  radio.SimpleStr("hello"),
-			err:  nil,
+			title: "BadPrefix",
+			input: "?helo",
+			val:   nil,
+			err:   errors.New("bad prefix '?'"),
 		},
 		{
-			data: "+",
-			val:  radio.SimpleStr(""),
-			err:  io.EOF,
+			title: "SimpleStr",
+			input: "+hello\r\n",
+			val:   radio.SimpleStr("hello"),
+			err:   nil,
 		},
 		{
-			data: "+\r\n",
-			val:  radio.SimpleStr(""),
-			err:  nil,
+			title: "SimpleStr-Empty",
+			input: "+\r\n",
+			val:   radio.SimpleStr(""),
+			err:   nil,
 		},
 		{
-			data: "+hello",
-			val:  radio.SimpleStr("hello"),
-			err:  io.EOF,
+			title: "SimpleStr-NoCRLF",
+			input: "+hello",
+			val:   nil,
+			err:   io.EOF,
 		},
 		{
-			data: "-",
-			val:  radio.ErrorStr(""),
-			err:  io.EOF,
+			title: "SimpleStr-MultiValue",
+			input: "+hello\r\n+world\r\n",
+			val:   radio.SimpleStr("hello"),
+			err:   nil,
 		},
 		{
-			data: "-\r\n",
-			val:  radio.ErrorStr(""),
-			err:  nil,
+			title: "ErrorStr",
+			input: "-ERR failed\r\n",
+			val:   radio.ErrorStr("ERR failed"),
+			err:   nil,
 		},
 		{
-			data: "-ERR failed",
-			val:  radio.ErrorStr("ERR failed"),
-			err:  io.EOF,
+			title: "ErrorStr-NoValue",
+			input: "-\r\n",
+			val:   radio.ErrorStr(""),
+			err:   nil,
 		},
 		{
-			data: "-ERR failed\r\n",
-			val:  radio.ErrorStr("ERR failed"),
-			err:  nil,
+			title: "ErrorStr-NoCRLF",
+			input: "-ERR failed",
+			val:   nil,
+			err:   io.EOF,
 		},
 		{
-			data: ":",
-			val:  radio.Integer(0),
-			err:  io.EOF,
+			title: "Integer",
+			input: ":100\r\n",
+			val:   radio.Integer(100),
+			err:   nil,
 		},
 		{
-			data: ":10",
-			val:  radio.Integer(0),
-			err:  io.EOF,
+			title: "Integer-NoValue",
+			input: ":\r\n",
+			val:   nil,
+			err:   errors.New("no number"),
 		},
 		{
-			data: ":10\r\n",
-			val:  radio.Integer(10),
-			err:  nil,
+			title: "Integer-NoCRLF",
+			input: ":100",
+			val:   nil,
+			err:   io.EOF,
 		},
 		{
-			data: ":\r\n",
-			val:  radio.Integer(0),
-			err:  errors.New("no number"),
+			title: "Integer-BadFormat",
+			input: ":10.5\r\n",
+			val:   nil,
+			err:   errors.New("invalid number format"),
 		},
 		{
-			data: "$5\r\n",
-			val:  nil,
-			err:  io.EOF,
+			title: "Integer-EOF",
+			input: ":",
+			val:   nil,
+			err:   io.EOF,
 		},
 		{
-			data: "$5\r\nhello",
+			title: "BulkStr",
+			input: "$5\r\nhello\r\n",
 			val: &radio.BulkStr{
 				Value: []byte("hello"),
 			},
 			err: nil,
 		},
 		{
-			data: "$5\r\nhel\r\n",
-			val: &radio.BulkStr{
-				Value: []byte("hel\r\n"),
-			},
-			err: nil,
+			title: "BulkStr-NoSize",
+			input: "$\r\n",
+			val:   nil,
+			err:   errors.New("no number"),
 		},
 		{
-			data: "$1.5\r\nssd\r\n",
-			val:  nil,
-			err:  errors.New("invalid number format"),
+			title: "BulkStr-NegativeSize",
+			input: "$-1\r\n",
+			val:   &radio.BulkStr{},
+			err:   nil,
 		},
 		{
-			data: "$-1\r\n",
-			val:  &radio.BulkStr{},
-			err:  nil,
+			title: "BulkStr-NoData",
+			input: "$10\r\nhel\r\n",
+			val:   nil,
+			err:   io.EOF,
 		},
 		{
-			data: "$0\r\n",
-			val: &radio.BulkStr{
-				Value: []byte{},
-			},
-			err: nil,
-		},
-		{
-			data: "*",
-			val:  nil,
-			err:  io.EOF,
-		},
-		{
-			data: "*-1\r\n",
-			val:  &radio.Array{},
-			err:  nil,
-		},
-
-		{
-			data: "*0\r\n",
-			val: &radio.Array{
-				Items: []radio.Value{},
-			},
-			err: nil,
-		},
-		{
-			data: "*1\r\n+hello\r\n",
+			title: "Array",
+			input: "*1\r\n+hello\r\n",
 			val: &radio.Array{
 				Items: []radio.Value{
 					radio.SimpleStr("hello"),
@@ -150,157 +179,123 @@ func TestReader_Read(suite *testing.T) {
 			err: nil,
 		},
 		{
-			data: "*2\r\n+hello\r\n-ERR failed\r\n",
-			val: &radio.Array{
-				Items: []radio.Value{
-					radio.SimpleStr("hello"),
-					radio.ErrorStr("ERR failed"),
-				},
-			},
+			title: "Array-NoSize",
+			input: "*\r\n",
+			val:   nil,
+			err:   errors.New("no number"),
 		},
 		{
-			data: "*2\r\n*1\r\n+hello\r\n-ERR failed\r\n",
-			val: &radio.Array{
-				Items: []radio.Value{
-					&radio.Array{
-						Items: []radio.Value{
-							radio.SimpleStr("hello"),
-						},
-					},
-					radio.ErrorStr("ERR failed"),
-				},
-			},
+			title: "Array-NegativeSize",
+			input: "*-1\r\n",
+			val:   &radio.Array{},
+			err:   nil,
 		},
 		{
-			data: "*2\r\n*1\r\n+hello\r\n-ERR failed",
-			val:  nil,
-			err:  io.EOF,
+			title: "Array-InsufficientData",
+			input: "*2\r\n+hello\r\n",
+			val:   nil,
+			err:   io.EOF,
+		},
+		{
+			title: "Array-InvalidSize",
+			input: "*2.5\r\n",
+			val:   nil,
+			err:   errors.New("invalid number format"),
 		},
 	}
 
-	for _, cs := range cases {
-		suite.Run(cs.data, func(t *testing.T) {
-			parse(cs.data, func(val radio.Value, err error) {
-				assert.Equal(t, cs.val, val)
-				assert.Equal(t, cs.err, err)
-			})
-		})
-	}
-}
-
-func parse(s string, fx func(val radio.Value, err error)) {
-	par := radio.NewReader(strings.NewReader(s), false)
-	val, err := par.Read()
-	fx(val, err)
+	runAllCases(suite, cases, false)
 }
 
 func TestReader_Read_ServerMode(suite *testing.T) {
 	suite.Parallel()
 
-	cases := []struct {
-		input string
-		mb    radio.MultiBulk
-		err   bool
-	}{
+	cases := []readTestCase{
 		{
-			input: "",
-			err:   true,
-		},
-		{
+			title: "InlineStr",
 			input: "hello\r\n",
-			err:   false,
-			mb: radio.MultiBulk{
-				Items: []radio.BulkStr{
-					{
+			val: &radio.Array{
+				Items: []radio.Value{
+					&radio.BulkStr{
 						Value: []byte("hello"),
 					},
 				},
 			},
+			err: nil,
 		},
 		{
+			title: "InlineStr-EOF",
 			input: "hello",
-			err:   true,
+			val:   nil,
+			err:   io.EOF,
 		},
 		{
+			title: "MultiBulk-NullValue",
 			input: "*-1\r\n",
-			err:   false,
-			mb:    radio.MultiBulk{},
+			val:   &radio.Array{},
+			err:   nil,
 		},
 		{
-			input: "*abc\r\n",
-			err:   true,
-		},
-		{
-			input: "*0\r\n",
-			err:   false,
-			mb: radio.MultiBulk{
-				Items: []radio.BulkStr{},
-			},
-		},
-		{
+			title: "MultiBulk-EOF",
 			input: "*1\r\n",
-			err:   true,
+			val:   nil,
+			err:   io.EOF,
 		},
 		{
+			title: "SimpleStrInArray",
 			input: "*1\r\n+hello\r\n",
-			err:   true,
+			val:   nil,
+			err:   errors.New("Protocol error: expecting '$', got '+'"),
 		},
 		{
+			title: "MultiBulk-InvalidSize",
+			input: "*1.4\r\n",
+			val:   nil,
+			err:   errors.New("Protocol error: invalid multibulk length"),
+		},
+		{
+			title: "MultiBulk-InvalidBulkSize",
+			input: "*1\r\n$1.5\r\n",
+			val:   nil,
+			err:   errors.New("Protocol error: invalid bulk length"),
+		},
+		{
+			title: "MultiBulk-NegativeBulkSize",
 			input: "*1\r\n$-1\r\n",
-			err:   false,
-			mb: radio.MultiBulk{
-				Items: []radio.BulkStr{
-					{},
-				},
-			},
-		},
-		{
-			input: "*1\r\n$5\r\n",
-			err:   true,
-		},
-		{
-			input: "*1\r\n$5\r\nhello\r\n",
-			err:   false,
-			mb: radio.MultiBulk{
-				Items: []radio.BulkStr{
-					{
-						Value: []byte("hello"),
-					},
-				},
-			},
-		},
-		{
-			input: "*2\r\n$5\r\nhello\r\n$4\r\ncool\r\n",
-			err:   false,
-			mb: radio.MultiBulk{
-				Items: []radio.BulkStr{
-					{
-						Value: []byte("hello"),
-					},
-					{
-						Value: []byte("cool"),
-					},
-				},
-			},
+			val:   nil,
+			err:   errors.New("Protocol error: invalid bulk length"),
 		},
 	}
 
-	for id, cs := range cases {
-		suite.Run(fmt.Sprintf("Case#%d", id), func(t *testing.T) {
-			rd := radio.NewReader(bytes.NewBuffer([]byte(cs.input)), true)
+	runAllCases(suite, cases, true)
+}
 
-			val, err := rd.Read()
-			if cs.err {
-				assert.Error(t, err)
-				assert.Nil(t, val)
-			} else {
-				assert.NoError(t, err)
-				require.NotNil(t, val)
+func runAllCases(suite *testing.T, cases []readTestCase, serverMode bool) {
+	for _, cs := range cases {
+		if cs.title == "" {
+			cs.title = cs.input
+		}
 
-				mb, ok := val.(*radio.MultiBulk)
-				require.True(t, ok)
-				assert.Equal(t, cs.mb, *mb)
+		suite.Run(cs.title, func(t *testing.T) {
+			par := radio.NewReader(strings.NewReader(cs.input), serverMode)
+			val, err := par.Read()
+
+			if !reflect.DeepEqual(cs.err, err) {
+				t.Errorf("expecting error '%v', got '%v'", cs.err, err)
+			}
+
+			if !reflect.DeepEqual(cs.val, val) {
+				t.Errorf("expecting RESP value '%s{%v}', got '%s{%v}'",
+					reflect.TypeOf(cs.val), cs.val, reflect.TypeOf(val), val)
 			}
 		})
 	}
+
+}
+
+type readTestCase struct {
+	title string
+	input string
+	val   radio.Value
+	err   error
 }
