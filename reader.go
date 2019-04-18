@@ -10,6 +10,10 @@ import (
 
 const defaultBufSize = 4096
 
+// ErrBufferFull is returned when there is no space left on the buffer to read
+// more data.
+var ErrBufferFull = errors.New("buffer is full")
+
 // NewReader initializes the RESP reader with given reader. In server mode,
 // input data will be read line-by-line except in case of array of bulkstrings.
 //
@@ -30,27 +34,34 @@ func NewReaderSize(r io.Reader, isServer bool, size int) *Reader {
 	}
 }
 
-// Reader implements server and client RESP protocol parser. IsServer
-// flag controls the RESP parsing mode.
-// - When IsServer set to true, only Multi Bulk (Array of Bulk strings)
-//   and inline commands are supported.
-// - When IsServer set to false, all RESP values are enabled.
+// Reader implements server and client RESP protocol parser. IsServer flag
+// controls the RESP parsing mode. When IsServer set to true, only Multi Bulk
+// (Array of Bulk strings) and inline commands are supported. When IsServer set
+// to false, all RESP values are enabled. FixedBuffer fields allows controlling
+// the growth of buffer.
 // Read https://redis.io/topics/protocol for RESP protocol specification.
 type Reader struct {
+	// IsServer controls the RESP parsing mode. If set, only inline string
+	// and multi-bulk (array of bulk strings) will be enabled.
+	IsServer bool
+
+	// FixedBuffer if set does not allow the buffer to grow in case of
+	// large incoming data and instead returns ErrBufferFull. If this is
+	// false, buffer grows linearly as needed by extending the buffer by
+	// the minimum buffer size.
+	FixedBuffer bool
+
 	ir      io.Reader
 	start   int
 	end     int
 	buf     []byte
 	sz      int
 	inArray bool
-
-	// IsServer controls the RESP parsing mode.
-	IsServer bool
 }
 
 // Read reads next RESP value from the stream.
 func (rd *Reader) Read() (Value, error) {
-	if err := rd.buffer(false); err != nil {
+	if _, err := rd.buffer(false); err != nil {
 		return nil, err
 	}
 	prefix := rd.buf[rd.start]
@@ -214,6 +225,7 @@ func (rd *Reader) readArray() (*Array, error) {
 	}
 
 	if size < 0 {
+		// -1 (negative size) means a null array
 		return &Array{}, nil
 	}
 
@@ -234,7 +246,7 @@ func (rd *Reader) readArray() (*Array, error) {
 
 func (rd *Reader) readExactly(n int) ([]byte, error) {
 	for rd.end-rd.start < n {
-		if err := rd.buffer(true); err != nil {
+		if _, err := rd.buffer(true); err != nil {
 			return nil, err
 		}
 	}
@@ -246,8 +258,14 @@ func (rd *Reader) readExactly(n int) ([]byte, error) {
 
 func (rd *Reader) readTillCRLF() ([]byte, error) {
 	var crlf int
-	for crlf = bytes.Index(rd.buf[rd.start:rd.end], []byte("\r\n")); crlf < 0; {
-		if err := rd.buffer(true); err != nil {
+
+	for {
+		crlf = bytes.Index(rd.buf[rd.start:rd.end], []byte("\r\n"))
+		if crlf >= 0 {
+			break
+		}
+
+		if _, err := rd.buffer(true); err != nil {
 			return nil, err
 		}
 	}
@@ -275,25 +293,29 @@ func (rd *Reader) readNumber() (int, error) {
 	return toInt(data)
 }
 
-func (rd *Reader) buffer(force bool) error {
+func (rd *Reader) buffer(force bool) (int, error) {
 	if !force && rd.end > rd.start {
-		return nil // buffer already has some data.
+		return 0, nil // buffer already has some data.
 	}
 
 	if rd.end > 0 && rd.start >= rd.end {
 		rd.start = 0
 		rd.end = 0
 	} else if rd.end == len(rd.buf) {
+		if rd.FixedBuffer {
+			return 0, ErrBufferFull
+		}
+
 		rd.buf = append(rd.buf, make([]byte, rd.sz)...)
 	}
 
 	n, err := rd.ir.Read(rd.buf[rd.end:])
 	if err != nil {
-		return err
+		return 0, err
 	}
 	rd.end += n
 
-	return nil
+	return n, nil
 }
 
 func toInt(data []byte) (int, error) {

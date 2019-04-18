@@ -13,11 +13,6 @@ type Value interface {
 	Serialize() string
 }
 
-// Nullable represents a null support value in RESP.
-type Nullable interface {
-	IsNil() bool
-}
-
 // SimpleStr represents a simple string in RESP.
 // Refer https://redis.io/topics/protocol#resp-simple-strings
 type SimpleStr string

@@ -19,3 +19,8 @@ type Writer struct {
 func (rw *Writer) Write(v Value) (int, error) {
 	return rw.w.Write([]byte(v.Serialize()))
 }
+
+// WriteErr writes given error as RESP error to the writer.
+func (rw *Writer) WriteErr(err error) (int, error) {
+	return rw.w.Write([]byte(ErrorStr(err.Error()).Serialize()))
+}

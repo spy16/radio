@@ -35,7 +35,7 @@ func TestNewReader(suite *testing.T) {
 	})
 
 	suite.Run("WithSize", func(t *testing.T) {
-		rd := radio.NewReaderSize(bytes.NewBufferString("hello"), false, 10)
+		rd := radio.NewReaderSize(bytes.NewBufferString("+hello\r\n"), false, 2)
 		if rd == nil {
 			t.Errorf("return value must not be nil")
 		}
@@ -43,13 +43,39 @@ func TestNewReader(suite *testing.T) {
 			t.Errorf("reader expected to be in client mode, but in server mode")
 		}
 
-		minSz, curSz := rd.Size()
-		if minSz != 10 {
-			t.Errorf("expected minimum buffer size to be 10, got %d", minSz)
+		v, err := rd.Read()
+		if err != nil {
+			t.Errorf("not expecting error, got '%v'", err)
 		}
 
-		if curSz != 10 {
-			t.Errorf("expected current buffer size to be 10, got %d", curSz)
+		if v == nil {
+			t.Errorf("expecting non-nil value from reader, got nil")
+		}
+
+		minSz, curSz := rd.Size()
+		if minSz != 2 {
+			t.Errorf("expected minimum buffer size to be 2, got %d", minSz)
+		}
+
+		if curSz != 8 {
+			t.Errorf("expected current buffer size to be 8, got %d", curSz)
+		}
+	})
+
+	suite.Run("WithFixedSize", func(t *testing.T) {
+		rd := radio.NewReaderSize(bytes.NewBufferString("*hello"), false, 2)
+		if rd == nil {
+			t.Errorf("return value must not be nil")
+		}
+		rd.FixedBuffer = true
+
+		v, err := rd.Read()
+		if err != radio.ErrBufferFull {
+			t.Errorf("expecting error '%v', got '%v'", radio.ErrBufferFull, err)
+		}
+
+		if v != nil {
+			t.Errorf("expecting nil value from reader, got '%v'", v)
 		}
 	})
 }
