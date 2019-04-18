@@ -47,8 +47,7 @@ type Reader struct {
 
 	// FixedBuffer if set does not allow the buffer to grow in case of
 	// large incoming data and instead returns ErrBufferFull. If this is
-	// false, buffer grows linearly as needed by extending the buffer by
-	// the minimum buffer size.
+	// false, buffer grows by doubling the buffer size as needed.
 	FixedBuffer bool
 
 	ir      io.Reader
@@ -306,7 +305,7 @@ func (rd *Reader) buffer(force bool) (int, error) {
 			return 0, ErrBufferFull
 		}
 
-		rd.buf = append(rd.buf, make([]byte, rd.sz)...)
+		rd.buf = append(rd.buf, make([]byte, len(rd.buf))...)
 	}
 
 	n, err := rd.ir.Read(rd.buf[rd.end:])
