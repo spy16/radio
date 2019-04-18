@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/spy16/radio"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestSerialize(suite *testing.T) {
@@ -81,73 +80,89 @@ func TestSerialize(suite *testing.T) {
 
 	for _, cs := range cases {
 		suite.Run(reflect.TypeOf(cs.val).String(), func(t *testing.T) {
-			assert.Equal(t, cs.resp, cs.val.Serialize())
-
-			var str string
-			if stringer, ok := cs.val.(fmt.Stringer); ok {
-				str = stringer.String()
-			} else {
-				str = fmt.Sprintf("%s", cs.val)
+			actualResp := cs.val.Serialize()
+			if cs.resp != actualResp {
+				t.Errorf("expecting serialization '%s', got '%s'", cs.resp, actualResp)
 			}
-			assert.Equal(t, cs.str, str)
+
+			var actualStr string
+			if stringer, ok := cs.val.(fmt.Stringer); ok {
+				actualStr = stringer.String()
+			} else {
+				actualStr = fmt.Sprintf("%s", cs.val)
+			}
+
+			if cs.str != actualStr {
+				t.Errorf("expecting string '%s', got '%s'", cs.str, actualStr)
+			}
 		})
 	}
 }
 
-func TestBulkStr_IsNil(suite *testing.T) {
+func TestValue_IsNil(suite *testing.T) {
 	suite.Parallel()
 
-	suite.Run("WhenEmpty", func(t *testing.T) {
-		bs := &radio.BulkStr{
-			Value: []byte(""),
-		}
-
-		assert.False(t, bs.IsNil())
-	})
-
-	suite.Run("WithValue", func(t *testing.T) {
-		bs := &radio.BulkStr{
-			Value: []byte("helllo"),
-		}
-
-		assert.False(t, bs.IsNil())
-	})
-
-	suite.Run("WhenNil", func(t *testing.T) {
-		bs := &radio.BulkStr{
-			Value: nil,
-		}
-
-		assert.True(t, bs.IsNil())
-	})
-}
-
-func TestArray_IsNil(suite *testing.T) {
-	suite.Parallel()
-
-	suite.Run("WhenEmpty", func(t *testing.T) {
-		arr := &radio.Array{
-			Items: []radio.Value{},
-		}
-
-		assert.False(t, arr.IsNil())
-	})
-
-	suite.Run("WithValue", func(t *testing.T) {
-		arr := &radio.Array{
-			Items: []radio.Value{
-				radio.SimpleStr("hello"),
+	cases := []struct {
+		title       string
+		val         radio.Value
+		shouldBeNil bool
+	}{
+		{
+			title: "BulkStr-WhenEmpty",
+			val: &radio.BulkStr{
+				Value: []byte(""),
 			},
-		}
+			shouldBeNil: false,
+		},
+		{
+			title: "BulkStr-WithValue",
+			val: &radio.BulkStr{
+				Value: []byte("hello"),
+			},
+			shouldBeNil: false,
+		},
+		{
+			title: "BulkStr-WhenNil",
+			val: &radio.BulkStr{
+				Value: nil,
+			},
+			shouldBeNil: true,
+		},
+		{
+			title: "Array-WhenEmpty",
+			val: &radio.Array{
+				Items: []radio.Value{},
+			},
+			shouldBeNil: false,
+		},
+		{
+			title: "Array-WithValue",
+			val: &radio.Array{
+				Items: []radio.Value{
+					radio.SimpleStr("hello"),
+				},
+			},
+			shouldBeNil: false,
+		},
+		{
+			title: "Array-WhenNil",
+			val: &radio.Array{
+				Items: nil,
+			},
+			shouldBeNil: true,
+		},
+	}
 
-		assert.False(t, arr.IsNil())
-	})
-
-	suite.Run("WhenNil", func(t *testing.T) {
-		arr := &radio.Array{
-			Items: nil,
-		}
-
-		assert.True(t, arr.IsNil())
-	})
+	for _, cs := range cases {
+		suite.Run(cs.title, func(t *testing.T) {
+			nillable, ok := cs.val.(interface{ IsNil() bool })
+			if ok {
+				if nillable.IsNil() != cs.shouldBeNil {
+					t.Errorf("expecting '%t', got '%t'", cs.shouldBeNil, !cs.shouldBeNil)
+				}
+			} else {
+				t.Logf("type %s is not nillable", reflect.TypeOf(cs.val))
+			}
+		})
+	}
 }

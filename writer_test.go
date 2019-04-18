@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/spy16/radio"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestWriter_Write(t *testing.T) {
@@ -13,5 +12,9 @@ func TestWriter_Write(t *testing.T) {
 	wr := radio.NewWriter(b)
 	wr.Write(radio.SimpleStr("hello"))
 
-	assert.Equal(t, "+hello\r\n", b.String())
+	expected := "+hello\r\n"
+
+	if actual := b.String(); actual != expected {
+		t.Errorf("expecting '%s', got '%s'", expected, actual)
+	}
 }
