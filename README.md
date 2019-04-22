@@ -51,3 +51,10 @@ Benchmarks were run using [redis-benchmark](https://redis.io/topics/benchmarks) 
     PING_INLINE: 71199.71 requests per second
     PING_BULK: 71301.25 requests per second
     ```
+
+
+## TODO
+
+- [ ] Add pieplining support
+- [ ] Pub sub support
+- [ ] Client functions
