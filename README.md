@@ -53,7 +53,7 @@ Benchmarks were run using [redis-benchmark](https://redis.io/topics/benchmarks) 
     ```
 
 
-## TODO
+### TODO
 
 - [ ] Add pieplining support
 - [ ] Pub sub support
