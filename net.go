@@ -46,6 +46,20 @@ func clientLoop(ctx context.Context, rwc io.ReadWriteCloser, handler Handler) {
 		}
 
 		val, err := rdr.Read()
+		if val != nil {
+			req, err := newRequest(val)
+			if err != nil {
+				rw.Write(ErrorStr("ERR " + err.Error()))
+				return
+			}
+
+			if req == nil {
+				continue
+			}
+
+			handler.ServeRESP(rw, req)
+		}
+
 		if err != nil {
 			if err == io.EOF {
 				break
@@ -55,17 +69,6 @@ func clientLoop(ctx context.Context, rwc io.ReadWriteCloser, handler Handler) {
 			return
 		}
 
-		req, err := newRequest(val)
-		if err != nil {
-			rw.Write(ErrorStr("ERR " + err.Error()))
-			return
-		}
-
-		if req == nil {
-			continue
-		}
-
-		handler.ServeRESP(rw, req)
 	}
 }
 

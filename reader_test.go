@@ -271,7 +271,7 @@ func TestReader_Read_ServerMode(suite *testing.T) {
 			title: "SimpleStrInArray",
 			input: "*1\r\n+hello\r\n",
 			val:   nil,
-			err:   errors.New("Protocol error: expecting '$', got '+'"),
+			err:   errors.New("Protocol error: expected '$', got '+'"),
 		},
 		{
 			title: "MultiBulk-InvalidSize",

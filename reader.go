@@ -56,68 +56,30 @@ type Reader struct {
 	buf     []byte
 	sz      int
 	inArray bool
+
+	vals []Value
 }
 
-// Read reads next RESP value from the stream.
 func (rd *Reader) Read() (Value, error) {
-	if _, err := rd.buffer(false); err != nil {
+	var err error
+	for len(rd.vals) == 0 {
+		err = rd.readAll()
+		if err != nil && err != errIncompleteData {
+			break
+		}
+	}
+
+	if err == errIncompleteData {
+		err = nil
+	}
+
+	if len(rd.vals) == 0 {
 		return nil, err
 	}
-	prefix := rd.buf[rd.start]
 
-	if rd.IsServer {
-		if rd.inArray && prefix != '$' {
-			return nil, fmt.Errorf("Protocol error: expecting '$', got '%c'", prefix)
-		}
-
-		if prefix != '*' && prefix != '$' {
-			v, err := rd.readInline()
-			if err != nil {
-				return nil, err
-			}
-			return v, nil
-		}
-	}
-
-	switch prefix {
-	case '+':
-		v, err := rd.readSimpleStr()
-		if err != nil {
-			return nil, err
-		}
-		return v, nil
-
-	case '-':
-		v, err := rd.readErrorStr()
-		if err != nil {
-			return nil, err
-		}
-		return v, nil
-
-	case ':':
-		v, err := rd.readInteger()
-		if err != nil {
-			return nil, err
-		}
-
-		return v, nil
-
-	case '$':
-		v, err := rd.readBulkStr()
-		if err != nil {
-			return nil, err
-		}
-		return v, nil
-
-	case '*':
-		v, err := rd.readArray()
-		if err != nil {
-			return nil, err
-		}
-		return v, nil
-	}
-
-	return nil, fmt.Errorf("bad prefix '%c'", prefix)
+	v := rd.vals[0]
+	rd.vals = rd.vals[1:]
+	return v, err
 }
 
 // Size returns the current buffer size and the minimum buffer size
@@ -126,177 +88,136 @@ func (rd *Reader) Size() (minSize int, currentSize int) {
 	return rd.sz, len(rd.buf)
 }
 
-// Discard discards the contents of the buffer.
-func (rd *Reader) Discard() {
-	rd.start = rd.end
-}
-
-func (rd *Reader) readSimpleStr() (SimpleStr, error) {
-	rd.start++ // skip over '+'
-
-	data, err := rd.readTillCRLF()
-	if err != nil {
-		return "", err
+func (rd *Reader) readAll() error {
+	if _, err := rd.buffer(); err != nil {
+		return err
 	}
 
-	return SimpleStr(data), nil
-}
-
-func (rd *Reader) readErrorStr() (ErrorStr, error) {
-	rd.start++ // skip over '-'
-
-	data, err := rd.readTillCRLF()
-	if err != nil {
-		return "", err
-	}
-
-	return ErrorStr(data), nil
-}
-
-func (rd *Reader) readInteger() (Integer, error) {
-	rd.start++ // skip over ':'
-
-	n, err := rd.readNumber()
-	return Integer(n), err
-}
-
-func (rd *Reader) readInline() (*Array, error) {
-	data, err := rd.readTillCRLF()
-	if err != nil {
-		return nil, err
-	}
-
-	return &Array{
-		Items: []Value{
-			&BulkStr{
-				Value: data,
-			},
-		},
-	}, nil
-}
-
-func (rd *Reader) readBulkStr() (*BulkStr, error) {
-	rd.start++ // skip over '$'
-
-	size, err := rd.readNumber()
-	if err != nil {
-		if rd.IsServer && (err == errInvalidNumber || err == errNoNumber) {
-			return nil, errors.New("Protocol error: invalid bulk length")
-		}
-		return nil, err
-	}
-
-	if size < 0 {
-		if rd.IsServer {
-			return nil, errors.New("Protocol error: invalid bulk length")
+	for rd.start < rd.end {
+		val, err := rd.readOne()
+		if err != nil {
+			return err
 		}
 
-		// -1 (negative size) means a null bulk string
-		// Refer https://redis.io/topics/protocol#resp-bulk-strings
-		return &BulkStr{}, nil
+		rd.vals = append(rd.vals, val)
 	}
 
-	data, err := rd.readExactly(size)
-	if err != nil {
-		return nil, err
-	}
-	rd.start += 2 // skip over CRLF
-
-	return &BulkStr{
-		Value: data,
-	}, nil
+	return nil
 }
 
-func (rd *Reader) readArray() (*Array, error) {
-	rd.inArray = true
-	defer func() {
-		rd.inArray = false
-	}()
-	rd.start++ // skip over '+'
+func (rd *Reader) readOne() (Value, error) {
+	if rd.start >= rd.end {
+		return nil, errIncompleteData
+	}
 
-	size, err := rd.readNumber()
-	if err != nil {
-		if rd.IsServer && (err == errInvalidNumber || err == errNoNumber) {
-			return nil, errors.New("Protocol error: invalid multibulk length")
+	prefix := rd.buf[rd.start]
+
+	if rd.IsServer {
+		if rd.inArray && prefix != '$' {
+			return nil, fmt.Errorf("Protocol error: expected '$', got '%c'", prefix)
 		}
 
-		return nil, err
+		if prefix != '*' && prefix != '$' {
+			offset, v, err := readInline(rd.buf[rd.start:rd.end])
+			if err != nil {
+				return nil, err
+			}
+			rd.start += offset
+
+			return v, nil
+		}
 	}
 
-	if size < 0 {
-		// -1 (negative size) means a null array
-		return &Array{}, nil
-	}
-
-	arr := &Array{}
-	arr.Items = []Value{}
-
-	for i := 0; i < size; i++ {
-		item, err := rd.Read()
+	switch prefix {
+	case '+':
+		data, err := tillCRLF(rd.buf[rd.start:rd.end])
 		if err != nil {
 			return nil, err
 		}
+		rd.start += len(data)
 
-		arr.Items = append(arr.Items, item)
-	}
+		value := SimpleStr(bytes.TrimRight(data[1:], "\r\n"))
+		return value, nil
 
-	return arr, nil
-}
-
-func (rd *Reader) readExactly(n int) ([]byte, error) {
-	for rd.end-rd.start < n {
-		if _, err := rd.buffer(true); err != nil {
+	case '-':
+		data, err := tillCRLF(rd.buf[rd.start:rd.end])
+		if err != nil {
 			return nil, err
 		}
-	}
+		rd.start += len(data)
 
-	data := rd.buf[rd.start : rd.start+n]
-	rd.start += n + 1
-	return data, nil
-}
+		value := ErrorStr(bytes.TrimRight(data[1:], "\r\n"))
+		return value, nil
 
-func (rd *Reader) readTillCRLF() ([]byte, error) {
-	var crlf int
-
-	for {
-		crlf = bytes.Index(rd.buf[rd.start:rd.end], []byte("\r\n"))
-		if crlf >= 0 {
-			break
-		}
-
-		if _, err := rd.buffer(true); err != nil {
+	case ':':
+		offset, num, err := readNumber(rd.buf[rd.start:rd.end])
+		if err != nil {
 			return nil, err
 		}
+		rd.start += offset
+
+		value := Integer(num)
+		return value, nil
+
+	case '$':
+		consumed, data, err := readBulkStr(rd.buf[rd.start:rd.end], rd.IsServer)
+		if err != nil {
+			return nil, err
+		}
+		rd.start += consumed
+
+		return &BulkStr{
+			Value: data,
+		}, nil
+
+	case '*':
+		rd.inArray = true
+		defer func() {
+			rd.inArray = false
+		}()
+
+		backupStart, backupEnd := rd.start, rd.end
+
+		offset, size, err := readNumber(rd.buf[rd.start:rd.end])
+		if err != nil {
+			if rd.IsServer && (err == errInvalidNumber || err == errNoNumber) {
+				return nil, errors.New("Protocol error: invalid multibulk length")
+			}
+
+			return nil, err
+		}
+
+		rd.start += offset
+
+		var arr Array
+		if size < 0 {
+			// -1 (negative size) means a null array
+			return &arr, nil
+		} else if size == 0 {
+			arr.Items = []Value{}
+			return &arr, nil
+		}
+
+		for len(arr.Items) < size {
+			val, err := rd.readOne()
+			if err != nil {
+				rd.start = backupStart
+				rd.end = backupEnd
+				return nil, err
+			}
+
+			if val != nil {
+				arr.Items = append(arr.Items, val)
+			}
+		}
+
+		return &arr, nil
 	}
 
-	if crlf == 0 {
-		return []byte(""), nil
-	}
-
-	data := make([]byte, crlf)
-	copy(data, rd.buf[rd.start:rd.start+crlf])
-	rd.start += crlf + 2
-	return data, nil
+	return nil, fmt.Errorf("bad prefix '%c'", prefix)
 }
 
-func (rd *Reader) readNumber() (int, error) {
-	data, err := rd.readTillCRLF()
-	if err != nil {
-		return 0, err
-	}
-
-	if len(data) == 0 {
-		return 0, errNoNumber
-	}
-
-	return toInt(data)
-}
-
-func (rd *Reader) buffer(force bool) (int, error) {
-	if !force && rd.end > rd.start {
-		return 0, nil // buffer already has some data.
-	}
-
+func (rd *Reader) buffer() (int, error) {
 	if rd.end > 0 && rd.start >= rd.end {
 		rd.start = 0
 		rd.end = 0
@@ -317,9 +238,94 @@ func (rd *Reader) buffer(force bool) (int, error) {
 	return n, nil
 }
 
+func readNumber(buf []byte) (consumed int, size int, err error) {
+	sizeData, err := tillCRLF(buf)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	size, err = toInt(bytes.TrimRight(sizeData[1:], "\r\n"))
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return len(sizeData), size, nil
+}
+
+func readInline(buf []byte) (int, *Array, error) {
+	data, err := tillCRLF(buf)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	return len(data), &Array{
+		Items: []Value{
+			&BulkStr{
+				Value: bytes.TrimRight(data, "\r\n"),
+			},
+		},
+	}, nil
+}
+
+func readBulkStr(buf []byte, isServer bool) (int, []byte, error) {
+	offset, size, err := readNumber(buf)
+	if err != nil {
+		if isServer && (err == errInvalidNumber || err == errNoNumber) {
+			return 0, nil, errors.New("Protocol error: invalid bulk length")
+		}
+
+		return 0, nil, err
+	}
+
+	if size < 0 {
+		if isServer {
+			return 0, nil, errors.New("Protocol error: invalid bulk length")
+		}
+
+		// -1 (negative size) means a null bulk string
+		// Refer https://redis.io/topics/protocol#resp-bulk-strings
+		return offset, nil, nil
+	}
+
+	if offset >= len(buf) || offset+size >= len(buf) {
+		return 0, nil, errIncompleteData
+	}
+
+	data := buf[offset : offset+size]
+	return offset + len(data) + 2, data, nil
+}
+
+func tillCRLF(buf []byte) ([]byte, error) {
+	i := 0
+	L := len(buf)
+	found := false
+	for i < len(buf) {
+		if buf[i] == '\r' {
+			if i+1 < L && buf[i+1] != 0 {
+				i++
+			}
+			found = true
+			break
+		}
+
+		i++
+	}
+
+	if !found {
+		return nil, errIncompleteData
+	}
+
+	return buf[0 : i+1], nil
+}
+
 func toInt(data []byte) (int, error) {
 	var d, sign int
 	L := len(data)
+
+	if L == 0 {
+		return 0, errNoNumber
+	}
+
 	for i, b := range data {
 		if i == 0 {
 			if b == '-' {
@@ -346,6 +352,7 @@ func toInt(data []byte) (int, error) {
 }
 
 var (
-	errInvalidNumber = errors.New("invalid number format")
-	errNoNumber      = errors.New("no number")
+	errInvalidNumber  = errors.New("invalid number format")
+	errNoNumber       = errors.New("no number")
+	errIncompleteData = errors.New("error incomplete data")
 )
