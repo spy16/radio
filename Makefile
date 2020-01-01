@@ -1,6 +1,18 @@
+all: clean fmt test
+
+fmt:
+	@echo "Formatting..."
+	@goimports -l -w ./
+
+clean:
+	@echo "Cleaning up..."
+	@rm -rf ./bin
+	@go mod tidy -v
+
 test:
-	go mod tidy -v
-	go test -cover ./.
+	@echo "Running tests..."
+	@go test -cover ./...
 
 test-verbose:
-	go test -count=1 -v -cover ./.
+	@echo "Running tests..."
+	@go test -v -cover ./...

@@ -13,7 +13,6 @@ compatible services/servers.
 - RESP value types to simplify wrapping values and serializing
 - RESP Parser that can be used with any `io.Reader` implementation (e.g., AOF files etc.)
 
-
 ## Benchmarks
 
 Benchmarks were run using [redis-benchmark](https://redis.io/topics/benchmarks) tool.
@@ -26,7 +25,7 @@ Benchmarks were run using [redis-benchmark](https://redis.io/topics/benchmarks) 
 - Run Server: `redis-server --port 9736 --appendonly no`
 - Run Benchmark: `redis-benchmark -h 127.0.0.1 -p 9736 -q -t PING -c 100 -n 1000000`
 
-    ```
+    ```plaintext
     PING_INLINE: 80515.30 requests per second
     PING_BULK: 78678.20 requests per second
     ```
@@ -37,7 +36,7 @@ Benchmarks were run using [redis-benchmark](https://redis.io/topics/benchmarks) 
 - Except `ping` command, everything else was removed from the example above
 - Run Benchmark: `redis-benchmark -h 127.0.0.1 -p 6380 -q -t PING -c 100 -n 1000000`
 
-    ```
+    ```plaintext
     PING_INLINE: 71669.17 requests per second
     PING_BULK: 71828.76 requests per second
     ```
@@ -47,11 +46,10 @@ Benchmarks were run using [redis-benchmark](https://redis.io/topics/benchmarks) 
 - Run Server: `go run examples/main.go -addr :8080`
 - Run Benchmark: `redis-benchmark -h 127.0.0.1 -p 8080 -q -t PING -c 100 -n 1000000`
 
-    ```
+    ```plaintext
     PING_INLINE: 71199.71 requests per second
     PING_BULK: 71301.25 requests per second
     ```
-
 
 ### TODO
 
